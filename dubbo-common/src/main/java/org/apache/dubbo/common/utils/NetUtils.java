@@ -105,6 +105,21 @@ public final class NetUtils {
      */
     private static BitSet USED_PORT = new BitSet(65536);
 
+    private static boolean reuseAddressSupported;
+
+    static {
+        try (ServerSocket serverSocket = new ServerSocket()) {
+            serverSocket.setReuseAddress(true);
+            reuseAddressSupported = true;
+        } catch (Throwable ignored) {
+            // ignore.
+        }
+    }
+
+    public static boolean isReuseAddressSupported() {
+        return reuseAddressSupported;
+    }
+
     public static int getRandomPort() {
         return RND_PORT_START + ThreadLocalRandom.current().nextInt(RND_PORT_RANGE);
     }
@@ -123,7 +138,12 @@ public final class NetUtils {
             if (USED_PORT.get(i)) {
                 continue;
             }
-            try (ServerSocket ignored = new ServerSocket(i)) {
+            try (ServerSocket serverSocket = new ServerSocket()) {
+                if (reuseAddressSupported) {
+                    // SO_REUSEADDR should be enabled before bind.
+                    serverSocket.setReuseAddress(true);
+                }
+                serverSocket.bind(new InetSocketAddress(i));
                 USED_PORT.set(i);
                 port = i;
                 break;
@@ -141,7 +161,12 @@ public final class NetUtils {
      * @return true if it's occupied
      */
     public static boolean isPortInUsed(int port) {
-        try (ServerSocket ignored = new ServerSocket(port)) {
+        try (ServerSocket serverSocket = new ServerSocket()) {
+            if (reuseAddressSupported) {
+                // SO_REUSEADDR should be enabled before bind.
+                serverSocket.setReuseAddress(true);
+            }
+            serverSocket.bind(new InetSocketAddress(port));
             return false;
         } catch (IOException e) {
             // continue
@@ -196,7 +221,7 @@ public final class NetUtils {
     }
 
     static boolean isValidV4Address(InetAddress address) {
-        if (address == null || address.isLoopbackAddress()) {
+        if (address == null || address.isLoopbackAddress() || address.isLinkLocalAddress()) {
             return false;
         }
 
@@ -552,7 +577,11 @@ public final class NetUtils {
                     if (addressOp.isPresent()) {
                         try {
                             if (addressOp.get().isReachable(100)) {
-                                return networkInterface;
+                                if (addressOp.get().isSiteLocalAddress()) {
+                                    return networkInterface;
+                                } else {
+                                    result = networkInterface;
+                                }
                             }
                         } catch (IOException e) {
                             // ignore
@@ -693,12 +722,14 @@ public final class NetUtils {
     }
 
     /**
-     * Check if address matches with specified pattern, currently only supports ipv4, use {@link this#matchIpExpression(String, String, int)} for ipv6 addresses.
+     * Check if address matches with specified pattern.
      *
      * @param pattern cird pattern
-     * @param address 'ip:port'
+     * @param address address
      * @return true if address matches with the pattern
+     * @deprecated use {@link #matchIpExpression(String, String, int)} with separated host and port instead.
      */
+    @Deprecated
     public static boolean matchIpExpression(String pattern, String address) throws UnknownHostException {
         if (address == null) {
             return false;

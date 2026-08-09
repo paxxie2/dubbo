@@ -20,10 +20,12 @@ import org.apache.dubbo.common.logger.ErrorTypeAwareLogger;
 import org.apache.dubbo.common.utils.JsonUtils;
 import org.apache.dubbo.remoting.http12.exception.HttpStatusException;
 import org.apache.dubbo.remoting.http12.message.HttpMessageEncoder;
+import org.apache.dubbo.rpc.RpcContext;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
@@ -145,7 +147,11 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
         if (!headerSent) {
             sendMetadata(buildMetadata(statusCode, data, null, HttpOutputMessage.EMPTY_MESSAGE));
         }
-        sendMessage(buildMessage(statusCode, data));
+        sendMessage(buildMessage(statusCode, data)).whenComplete((unused, throwable) -> {
+            if (throwable != null) {
+                LOGGER.error(INTERNAL_ERROR, "", "", "Failed to send message on channel " + httpChannel, throwable);
+            }
+        });
     }
 
     protected final int resolveStatusCode(Object data) {
@@ -160,19 +166,23 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
 
     protected final HttpMetadata buildMetadata(
             int statusCode, Object data, Throwable throwable, HttpOutputMessage message) {
+        HttpResponse response = RpcContext.getServiceContext().getResponse(HttpResponse.class);
         HttpMetadata metadata = encodeHttpMetadata(message == null);
         HttpHeaders headers = metadata.headers();
+        if (response != null && response.headers() != null) {
+            headers.set(response.headers());
+        }
         headers.set(HttpHeaderNames.STATUS.getKey(), HttpUtils.toStatusString(statusCode));
         if (message != null) {
             headers.set(HttpHeaderNames.CONTENT_TYPE.getKey(), responseEncoder.contentType());
         }
+        customizeHeaders(headers, throwable, message);
         if (data instanceof HttpResult) {
             HttpResult<?> result = (HttpResult<?>) data;
             if (result.getHeaders() != null) {
                 headers.set(result.getHeaders());
             }
         }
-        customizeHeaders(headers, throwable, message);
         return metadata;
     }
 
@@ -188,6 +198,9 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
     }
 
     protected final void sendMetadata(HttpMetadata metadata) {
+        if (headerSent) {
+            return;
+        }
         getHttpChannel().writeHeader(metadata);
         headerSent = true;
         if (LOGGER.isDebugEnabled()) {
@@ -195,7 +208,7 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
         }
     }
 
-    protected final HttpOutputMessage buildMessage(int statusCode, Object data) throws Throwable {
+    protected HttpOutputMessage buildMessage(int statusCode, Object data) throws Throwable {
         if (statusCode < 200 || statusCode == 204 || statusCode == 304) {
             return null;
         }
@@ -233,12 +246,13 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
         return getHttpChannel().newOutputMessage();
     }
 
-    protected final void sendMessage(HttpOutputMessage message) throws Throwable {
+    protected CompletableFuture<Void> sendMessage(HttpOutputMessage message) throws Throwable {
         if (message == null) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
-        getHttpChannel().writeMessage(message);
+        CompletableFuture<Void> future = getHttpChannel().writeMessage(message);
         postOutputMessage(message);
+        return future;
     }
 
     protected void preOutputMessage(HttpOutputMessage message) throws Throwable {}
@@ -266,7 +280,11 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
         if (!headerSent) {
             sendMetadata(buildMetadata(statusCode, data, throwable, HttpOutputMessage.EMPTY_MESSAGE));
         }
-        sendMessage(buildMessage(statusCode, data));
+        sendMessage(buildMessage(statusCode, data)).whenComplete((unused, t) -> {
+            if (t != null) {
+                LOGGER.error(INTERNAL_ERROR, "", "", "Failed to send error message on channel " + httpChannel, t);
+            }
+        });
     }
 
     protected final int resolveErrorStatusCode(Throwable throwable) {
@@ -325,6 +343,10 @@ public abstract class AbstractServerHttpChannelObserver<H extends HttpChannel> i
 
     protected String getContentType() {
         return responseEncoder.contentType();
+    }
+
+    protected boolean isHeaderSent() {
+        return headerSent;
     }
 
     protected void customizeTrailers(HttpHeaders headers, Throwable throwable) {

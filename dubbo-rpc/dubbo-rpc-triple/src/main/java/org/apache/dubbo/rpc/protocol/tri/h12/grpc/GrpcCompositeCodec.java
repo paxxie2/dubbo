@@ -18,8 +18,8 @@ package org.apache.dubbo.rpc.protocol.tri.h12.grpc;
 
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.config.ConfigurationUtils;
-import org.apache.dubbo.common.io.StreamUtils;
 import org.apache.dubbo.common.utils.ArrayUtils;
+import org.apache.dubbo.common.utils.ConcurrentHashMapUtils;
 import org.apache.dubbo.common.utils.UrlUtils;
 import org.apache.dubbo.remoting.http12.exception.DecodeException;
 import org.apache.dubbo.remoting.http12.exception.EncodeException;
@@ -31,6 +31,7 @@ import org.apache.dubbo.rpc.model.MethodDescriptor;
 import org.apache.dubbo.rpc.model.PackableMethod;
 import org.apache.dubbo.rpc.model.PackableMethodFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -64,9 +65,11 @@ public class GrpcCompositeCodec implements HttpMessageCodec {
             return;
         }
 
-        packableMethod = UrlUtils.computeServiceAttribute(
-                        url, PACKABLE_METHOD_CACHE, k -> new ConcurrentHashMap<MethodDescriptor, PackableMethod>())
-                .computeIfAbsent(methodDescriptor, md -> frameworkModel
+        packableMethod = ConcurrentHashMapUtils.computeIfAbsent(
+                UrlUtils.computeServiceAttribute(
+                        url, PACKABLE_METHOD_CACHE, k -> new ConcurrentHashMap<MethodDescriptor, PackableMethod>()),
+                methodDescriptor,
+                md -> frameworkModel
                         .getExtensionLoader(PackableMethodFactory.class)
                         .getExtension(ConfigurationUtils.getGlobalConfiguration(url.getApplicationModel())
                                 .getString(DUBBO_PACKABLE_METHOD_FACTORY, DEFAULT_KEY))
@@ -81,9 +84,10 @@ public class GrpcCompositeCodec implements HttpMessageCodec {
         try {
             int compressed = 0;
             outputStream.write(compressed);
-            byte[] bytes = packableMethod.packResponse(data);
-            writeLength(outputStream, bytes.length);
-            outputStream.write(bytes);
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            packableMethod.packResponse(data, buffer);
+            writeLength(outputStream, buffer.size());
+            buffer.writeTo(outputStream);
         } catch (HttpStatusException e) {
             throw e;
         } catch (Exception e) {
@@ -94,8 +98,7 @@ public class GrpcCompositeCodec implements HttpMessageCodec {
     @Override
     public Object decode(InputStream inputStream, Class<?> targetType, Charset charset) throws DecodeException {
         try {
-            byte[] data = StreamUtils.readBytes(inputStream);
-            return packableMethod.parseRequest(data);
+            return packableMethod.parseRequest(inputStream);
         } catch (HttpStatusException e) {
             throw e;
         } catch (Exception e) {

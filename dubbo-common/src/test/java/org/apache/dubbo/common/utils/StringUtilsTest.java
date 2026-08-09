@@ -17,7 +17,6 @@
 package org.apache.dubbo.common.utils;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -35,6 +34,7 @@ import static org.apache.dubbo.common.utils.CollectionUtils.ofSet;
 import static org.apache.dubbo.common.utils.StringUtils.splitToList;
 import static org.apache.dubbo.common.utils.StringUtils.splitToSet;
 import static org.apache.dubbo.common.utils.StringUtils.startsWithIgnoreCase;
+import static org.apache.dubbo.common.utils.StringUtils.toBoolean;
 import static org.apache.dubbo.common.utils.StringUtils.toCommaDelimitedString;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -246,9 +246,6 @@ class StringUtilsTest {
 
         assertEquals(0, StringUtils.split("", 'a').length);
         assertEquals(0, StringUtils.split(null, 'a').length);
-
-        System.out.println(Arrays.toString(StringUtils.split("boo:and:foo", ':')));
-        System.out.println(Arrays.toString(StringUtils.split("boo:and:foo", 'o')));
     }
 
     @Test
@@ -474,6 +471,7 @@ class StringUtilsTest {
 
     /**
      * Test {@link StringUtils#toCommaDelimitedString(String, String...)}
+     *
      * @since 2.7.8
      */
     @Test
@@ -483,6 +481,9 @@ class StringUtilsTest {
 
         value = toCommaDelimitedString(null, null);
         assertNull(value);
+
+        value = toCommaDelimitedString("one", null);
+        assertEquals("one", value);
 
         value = toCommaDelimitedString("");
         assertEquals("", value);
@@ -502,5 +503,52 @@ class StringUtilsTest {
         assertTrue(startsWithIgnoreCase("dubbo.application.name", "dubbo.application."));
         assertTrue(startsWithIgnoreCase("dubbo.Application.name", "dubbo.application."));
         assertTrue(startsWithIgnoreCase("Dubbo.application.name", "dubbo.application."));
+    }
+
+    @Test
+    void testSubstringAfter() {
+        // null or empty input is returned as-is
+        assertThat(StringUtils.substringAfter(null, ':'), is(nullValue()));
+        assertEquals("", StringUtils.substringAfter("", ':'));
+        // returns the substring after the first occurrence of the separator
+        assertEquals("b", StringUtils.substringAfter("a:b", ':'));
+        assertEquals("b:c", StringUtils.substringAfter("a:b:c", ':'));
+        // separator at the end leaves nothing after it
+        assertEquals("", StringUtils.substringAfter("ab:", ':'));
+        // when the separator is absent the Javadoc promises an empty string
+        assertEquals("", StringUtils.substringAfter("abc", ':'));
+    }
+
+    @Test
+    void testToBoolean() {
+        // true representations
+        assertEquals(Boolean.TRUE, toBoolean("true"));
+        assertEquals(Boolean.TRUE, toBoolean("True"));
+        assertEquals(Boolean.TRUE, toBoolean("on"));
+        assertEquals(Boolean.TRUE, toBoolean("yes"));
+        assertEquals(Boolean.TRUE, toBoolean("1"));
+        assertEquals(Boolean.TRUE, toBoolean("y"));
+        assertEquals(Boolean.TRUE, toBoolean("Y"));
+
+        // false representations
+        assertEquals(Boolean.FALSE, toBoolean("false"));
+        assertEquals(Boolean.FALSE, toBoolean("False"));
+        assertEquals(Boolean.FALSE, toBoolean("off"));
+        assertEquals(Boolean.FALSE, toBoolean("Off"));
+        assertEquals(Boolean.FALSE, toBoolean("no"));
+        assertEquals(Boolean.FALSE, toBoolean("0"));
+        assertEquals(Boolean.FALSE, toBoolean("n"));
+        assertEquals(Boolean.FALSE, toBoolean("N"));
+
+        // unrecognized or empty input returns null
+        assertNull(toBoolean(null));
+        assertNull(toBoolean(""));
+        assertNull(toBoolean("dubbo"));
+
+        // the overload falls back to the default value only for unrecognized input
+        assertFalse(StringUtils.toBoolean("off", true));
+        assertTrue(StringUtils.toBoolean("on", false));
+        assertTrue(StringUtils.toBoolean("unknown", true));
+        assertFalse(StringUtils.toBoolean(null, false));
     }
 }

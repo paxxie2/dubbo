@@ -48,9 +48,6 @@ import static org.apache.dubbo.common.constants.CommonConstants.UNDERLINE_SEPARA
 import static org.apache.dubbo.common.constants.CommonConstants.VERSION_KEY;
 import static org.apache.dubbo.common.constants.LoggerCodeConstants.COMMON_JSON_CONVERT_EXCEPTION;
 
-/**
- * StringUtils
- */
 public final class StringUtils {
 
     public static final String EMPTY_STRING = "";
@@ -1242,14 +1239,20 @@ public final class StringUtils {
     }
 
     /**
-     * Create the common-delimited {@link String} by one or more {@link String} members
+     * Creates a comma-delimited string from one or more string values.
      *
-     * @param one    one {@link String}
-     * @param others others {@link String}
-     * @return <code>null</code> if <code>one</code> or <code>others</code> is <code>null</code>
+     * @param one    the first string value
+     * @param others additional string values
+     * @return the combined string, or null if the first value is null
      * @since 2.7.8
      */
     public static String toCommaDelimitedString(String one, String... others) {
+        if (one == null) {
+            return null;
+        }
+        if (others == null) {
+            return one;
+        }
         String another = arrayToDelimitedString(others, COMMA_SEPARATOR);
         return isEmpty(another) ? one : one + COMMA_SEPARATOR + another;
     }
@@ -1305,7 +1308,7 @@ public final class StringUtils {
             return str;
         }
         int index = str.indexOf(separator);
-        return index == INDEX_NOT_FOUND ? str : str.substring(index + 1);
+        return index == INDEX_NOT_FOUND ? EMPTY_STRING : str.substring(index + 1);
     }
 
     /**
@@ -1425,7 +1428,7 @@ public final class StringUtils {
                     return Boolean.TRUE;
                 }
                 if ("off".equalsIgnoreCase(value)) {
-                    return Boolean.TRUE;
+                    return Boolean.FALSE;
                 }
                 break;
             case 4:

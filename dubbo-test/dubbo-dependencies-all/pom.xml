@@ -71,11 +71,6 @@
       <artifactId>dubbo-config-spring</artifactId>
       <version>${project.version}</version>
     </dependency>
-    <!--        <dependency>-->
-    <!--            <groupId>org.apache.dubbo</groupId>-->
-    <!--            <artifactId>dubbo-config-spring6</artifactId>-->
-    <!--            <version>${project.version}</version>-->
-    <!--        </dependency>-->
 
     <!-- config-center -->
     <dependency>
@@ -195,7 +190,11 @@
       <artifactId>dubbo-tracing</artifactId>
       <version>${project.version}</version>
     </dependency>
-
+    <dependency>
+      <groupId>org.apache.dubbo</groupId>
+      <artifactId>dubbo-metrics-otlp</artifactId>
+      <version>${project.version}</version>
+    </dependency>
     <!-- native -->
     <dependency>
       <groupId>org.apache.dubbo</groupId>
