@@ -47,6 +47,19 @@ class RadixTreeTest extends Specification {
             tree.empty
     }
 
+    def "question mark in a pattern is preserved during registration"() {
+        given:
+            def tree = new RadixTree<String>()
+            tree.addPath('/pages/t?st.html', 'page')
+            tree.addPath('/orders/{id:\\d+(?:-\\d+)?}', 'order')
+        expect:
+            tree.match('/pages/test.html')*.value == ['page']
+            tree.match('/pages/t')*.value == []
+            tree.match('/orders/12')*.value == ['order']
+            tree.match('/orders/12-3')*.value == ['order']
+            tree.match('/orders/x')*.value == []
+    }
+
     def "test end match"() {
         given:
             def tree = new RadixTree<Boolean>()
