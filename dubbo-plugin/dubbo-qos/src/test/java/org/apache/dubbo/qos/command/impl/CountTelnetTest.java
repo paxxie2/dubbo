@@ -32,13 +32,16 @@ import org.apache.dubbo.rpc.protocol.dubbo.DubboProtocol;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.reset;
@@ -116,6 +119,35 @@ class CountTelnetTest {
         }
 
         assertThat(sb.toString(), containsString(buildTable(methodName, 10, 10, "1", "0", "0")));
+    }
+
+    @Test
+    void testCountTimesAfterCd() throws Exception {
+        String methodName = "sayHello";
+        RpcStatus.removeStatus(url, methodName);
+        int times = 3;
+        CountDownLatch countLatch = new CountDownLatch(times + 1);
+        MockNettyChannel channel = new MockNettyChannel(url, countLatch);
+        channel.attr(ChangeTelnet.SERVICE_KEY).set(DemoService.class.getName());
+        given(mockCommandContext.getRemote()).willReturn(channel);
+        String[] args = new String[] {methodName, String.valueOf(times)};
+
+        ExtensionLoader.getExtensionLoader(Protocol.class)
+                .getExtension(DubboProtocol.NAME)
+                .export(mockInvoker);
+        RpcStatus.beginCount(url, methodName);
+        RpcStatus.endCount(url, methodName, 10L, true);
+        count.execute(mockCommandContext, args);
+        assertTrue(countLatch.await(10, TimeUnit.SECONDS), "count command should finish");
+
+        int tableCount = 0;
+        String table = buildTable(methodName, 10, 10, "1", "0", "0");
+        for (Object o : channel.getReceivedObjects()) {
+            if (o.toString().contains(table)) {
+                tableCount++;
+            }
+        }
+        assertThat(tableCount, is(times));
     }
 
     public static String buildTable(
