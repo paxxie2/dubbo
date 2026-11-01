@@ -160,6 +160,9 @@ public final class BasicOpenAPIDefinitionResolver
 
         Class<?> impl = annoMeta.getClass("implementation");
         Schema schema = impl == Void.class ? chain.resolve(parameter, context) : context.resolve(impl);
+        if (schema == null) {
+            return null;
+        }
 
         setValue(annoMeta, "group", schema::setGroup);
         setValue(annoMeta, "version", schema::setVersion);
@@ -185,7 +188,7 @@ public final class BasicOpenAPIDefinitionResolver
         setBoolValue(annoMeta, "deprecated", schema::setDeprecated);
         schema.setExtensions(Helper.toProperties(annoMeta.getStringArray("extensions")));
 
-        return chain.resolve(parameter, context);
+        return schema;
     }
 
     @Override
