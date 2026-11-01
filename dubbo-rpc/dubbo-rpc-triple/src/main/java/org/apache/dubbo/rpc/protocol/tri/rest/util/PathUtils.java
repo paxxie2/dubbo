@@ -153,19 +153,37 @@ public final class PathUtils {
     }
 
     public static String normalize(String contextPath, String path) {
+        return normalize(contextPath, path, false);
+    }
+
+    /** Normalizes a mapping pattern without treating question marks as query delimiters. */
+    public static String normalizePattern(String contextPath, String path) {
+        return normalize(contextPath, path, true);
+    }
+
+    private static String normalize(String contextPath, String path, boolean pattern) {
         if (StringUtils.isEmpty(contextPath)) {
-            return StringUtils.isEmpty(path) ? RestConstants.SLASH : normalize(path);
+            return StringUtils.isEmpty(path) ? RestConstants.SLASH : normalize(path, pattern);
         }
         if (StringUtils.isEmpty(path)) {
-            return normalize(contextPath);
+            return normalize(contextPath, pattern);
         }
         if (path.charAt(0) != '/') {
             contextPath += '/';
         }
-        return normalize(contextPath + path);
+        return normalize(contextPath + path, pattern);
     }
 
     public static String normalize(@Nonnull String path) {
+        return normalize(path, false);
+    }
+
+    /** Normalizes a mapping pattern without treating question marks as query delimiters. */
+    public static String normalizePattern(@Nonnull String path) {
+        return normalize(path, true);
+    }
+
+    private static String normalize(String path, boolean pattern) {
         int len = path.length();
         if (len == 0) {
             return RestConstants.SLASH;
@@ -245,9 +263,13 @@ public final class PathUtils {
                         default:
                     }
                     break;
-                case '?':
                 case '#':
                     break out;
+                case '?':
+                    if (!pattern) {
+                        break out;
+                    }
+                    // A pattern wildcard is an ordinary character for path normalization.
                 default:
                     switch (state) {
                         case State.INITIAL:
