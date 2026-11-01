@@ -17,7 +17,9 @@
 
 package org.apache.dubbo.rpc.protocol.tri.rest.mapping
 
+import org.apache.dubbo.rpc.protocol.tri.rest.mapping.condition.PathCondition
 import org.apache.dubbo.rpc.protocol.tri.rest.mapping.condition.PathExpression
+import org.apache.dubbo.rpc.protocol.tri.rest.util.PathUtils
 
 import spock.lang.Specification
 
@@ -33,6 +35,37 @@ class RadixTreeTest extends Specification {
             def match = tree.match('/a/b/d/e')
         then:
             !match.empty
+    }
+
+    def "question marks survive mapping and filter registration"() {
+        given:
+            def mappingTree = new RadixTree<String>()
+            def filterTree = new RadixTree<String>()
+            new PathCondition('/api', pattern).expressions.each { mappingTree.addPath(it, 'handler') }
+            filterTree.addPath('/api/' + pattern, 'handler')
+            def path = PathUtils.normalize('/api' + requestUri)
+        expect:
+            mappingTree.match(path)*.value == expected
+            filterTree.match(path)*.value == expected
+        where:
+            pattern                     | requestUri                    | expected
+            'pages/t?st.html'            | '/pages/test.html'            | ['handler']
+            'pages/t?st.html'            | '/pages/test.html?lang=en#top' | ['handler']
+            'pages/t?st.html'            | '/pages/t'                    | []
+            'pages/t?st.html'            | '/pages/tst.html'             | []
+            'pages/t?st.html'            | '/pages/teest.html'           | []
+            'orders/{id:\\d+(?:-\\d+)?}' | '/orders/12'                  | ['handler']
+            'orders/{id:\\d+(?:-\\d+)?}' | '/orders/12-3?expand=true'     | ['handler']
+            'orders/{id:\\d+(?:-\\d+)?}' | '/orders/abc'                 | []
+            'orders/{id:\\d+(?:-\\d+)?}' | '/orders/12-'                 | []
+    }
+
+    def "question-mark regular expressions retain path variables"() {
+        given:
+            def expression = new PathCondition('', '/orders/{id:\\d+(?:-\\d+)?}').expressions[0]
+        expect:
+            expression.match('/orders/12') == [id: '12']
+            expression.match('/orders/12-3') == [id: '12-3']
     }
 
     def "clear"() {
