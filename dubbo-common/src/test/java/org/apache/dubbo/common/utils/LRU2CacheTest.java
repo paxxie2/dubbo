@@ -61,6 +61,17 @@ class LRU2CacheTest {
     }
 
     @Test
+    void testUpdatesPromotedEntry() {
+        LRU2Cache<String, String> cache = new LRU2Cache<>(10);
+        cache.put("key", "v1");
+        cache.put("key", "v1");
+
+        cache.put("key", "v2");
+
+        assertThat(cache.get("key"), equalTo("v2"));
+    }
+
+    @Test
     void testCapacity() {
         LRU2Cache<String, Integer> cache = new LRU2Cache<String, Integer>();
         assertThat(cache.getMaxCapacity(), equalTo(1000));
