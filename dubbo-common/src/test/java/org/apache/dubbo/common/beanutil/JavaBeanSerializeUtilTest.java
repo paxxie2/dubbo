@@ -225,6 +225,27 @@ class JavaBeanSerializeUtilTest {
     }
 
     @Test
+    void testSerialize_MapWithNullKey() {
+        Map<Object, Object> map = new HashMap<>();
+        map.put("key1", "value1");
+        map.put(null, "nullKeyValue");
+
+        // A Map with a null key is legal input, so serialization must not throw.
+        JavaBeanDescriptor descriptor = Assertions.assertDoesNotThrow(() -> JavaBeanSerializeUtil.serialize(map));
+        Assertions.assertTrue(descriptor.isMapType());
+        Assertions.assertEquals(HashMap.class.getName(), descriptor.getClassName());
+        Assertions.assertEquals(2, descriptor.propertySize());
+
+        // round-trip: a null key must survive serialization and deserialization
+        Object result = JavaBeanSerializeUtil.deserialize(descriptor);
+        Assertions.assertTrue(result instanceof Map);
+        Map<?, ?> resultMap = (Map<?, ?>) result;
+        Assertions.assertEquals(2, resultMap.size());
+        Assertions.assertEquals("value1", resultMap.get("key1"));
+        Assertions.assertEquals("nullKeyValue", resultMap.get(null));
+    }
+
+    @Test
     void testConstructorArg() {
         Assertions.assertFalse((boolean) JavaBeanSerializeUtil.getConstructorArg(boolean.class));
         Assertions.assertFalse((boolean) JavaBeanSerializeUtil.getConstructorArg(Boolean.class));
