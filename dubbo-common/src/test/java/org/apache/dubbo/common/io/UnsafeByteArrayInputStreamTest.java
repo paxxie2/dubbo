@@ -60,6 +60,36 @@ class UnsafeByteArrayInputStreamTest {
     }
 
     @Test
+    void testZeroLengthReadAtEndReturnsZero() throws IOException {
+        byte[] destination = {1, 2, 3};
+        UnsafeByteArrayInputStream empty = new UnsafeByteArrayInputStream(new byte[0]);
+        assertThat(empty.read(destination, destination.length, 0), is(0));
+        assertThat(empty.read(new byte[0]), is(0));
+        assertThat(empty.position(), is(0));
+        Assertions.assertArrayEquals(new byte[] {1, 2, 3}, destination);
+
+        UnsafeByteArrayInputStream exhausted = new UnsafeByteArrayInputStream(new byte[] {10});
+        assertThat(exhausted.read(), is(10));
+        assertThat(exhausted.read(destination, 0, 0), is(0));
+        assertThat(exhausted.read(destination, 1, 0), is(0));
+        assertThat(exhausted.position(), is(1));
+
+        UnsafeByteArrayInputStream slice = new UnsafeByteArrayInputStream(new byte[] {10, 20}, 1, 1);
+        assertThat(slice.read(), is(20));
+        assertThat(slice.read(destination, 0, 0), is(0));
+        assertThat(slice.position(), is(2));
+    }
+
+    @Test
+    void testZeroLengthReadStillValidatesArguments() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream(new byte[0]);
+        Assertions.assertThrows(NullPointerException.class, () -> stream.read(null, 0, 0));
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> stream.read(new byte[1], -1, 0));
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> stream.read(new byte[1], 2, 0));
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> stream.read(new byte[1], 0, -1));
+    }
+
+    @Test
     void testWrongLength() {
         Assertions.assertThrows(IndexOutOfBoundsException.class, () -> {
             UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
