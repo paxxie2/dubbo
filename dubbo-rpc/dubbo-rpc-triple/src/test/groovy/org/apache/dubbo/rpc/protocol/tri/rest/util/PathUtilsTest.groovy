@@ -129,6 +129,16 @@ class PathUtilsTest extends Specification {
             '/one/./two/../three/../' | '/one/'
     }
 
+    def "Normalize path patterns preserves question marks"() {
+        expect:
+            PathUtils.normalizePattern(path) == result
+        where:
+            path               | result
+            '/one?two'         | '/one?two'
+            '/pages/t?st.html' | '/pages/t?st.html'
+            '/one#two'         | '/one'
+    }
+
     def "Normalize with context path"() {
         expect:
             PathUtils.normalize(contextPath, path) == result
@@ -143,5 +153,15 @@ class PathUtilsTest extends Specification {
             'one'       | 'two'  | '/one/two'
             '/one'      | '/two' | '/one/two'
             '/one//'    | '/two' | '/one/two'
+            '/api'      | '/one?two' | '/api/one'
+    }
+
+    def "Normalize path pattern with context path preserves question marks"() {
+        expect:
+            PathUtils.normalizePattern(contextPath, path) == result
+        where:
+            contextPath | path        | result
+            '/api'       | '/one?two' | '/api/one?two'
+            ''           | '/one?two' | '/one?two'
     }
 }
