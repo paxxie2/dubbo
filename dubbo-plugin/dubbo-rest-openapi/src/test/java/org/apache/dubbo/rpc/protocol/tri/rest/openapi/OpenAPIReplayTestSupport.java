@@ -50,8 +50,7 @@ final class OpenAPIReplayTestSupport {
 
     private OpenAPIReplayTestSupport() {}
 
-    static OpenAPI buildDocument(
-            FrameworkModel frameworkModel, Class<?> serviceType, String methodName, String path) {
+    static OpenAPI buildDocument(FrameworkModel frameworkModel, Class<?> serviceType, String methodName, String path) {
         try {
             return doBuildDocument(frameworkModel, serviceType, methodName, path);
         } catch (ReflectiveOperationException e) {
@@ -73,7 +72,8 @@ final class OpenAPIReplayTestSupport {
         MethodMeta methodMeta = new MethodMeta(Collections.singletonList(method), methodDescriptor, serviceMeta);
         methodMeta.initParameters();
         HandlerMeta handlerMeta = new HandlerMeta(null, methodMeta, null, methodDescriptor, null);
-        RequestMapping mapping = RequestMapping.builder().path(path).method("GET").build();
+        RequestMapping mapping =
+                RequestMapping.builder().path(path).method("GET").build();
         Registration registration = new Registration(mapping, handlerMeta);
         List<Registration> registrations = Collections.singletonList(registration);
 

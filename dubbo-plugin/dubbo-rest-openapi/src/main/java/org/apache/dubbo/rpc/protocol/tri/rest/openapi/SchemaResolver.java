@@ -32,14 +32,18 @@ import org.apache.dubbo.rpc.protocol.tri.rest.support.basic.Annotations;
 import org.apache.dubbo.rpc.protocol.tri.rest.util.RestToolKit;
 import org.apache.dubbo.rpc.protocol.tri.rest.util.TypeUtils;
 
+import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
 import java.lang.reflect.WildcardType;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 
 import static org.apache.dubbo.rpc.protocol.tri.rest.openapi.PrimitiveSchema.ARRAY;
@@ -50,7 +54,7 @@ public final class SchemaResolver {
     private final ConfigFactory configFactory;
     private final OpenAPISchemaResolver[] resolvers;
     private final OpenAPISchemaPredicate[] predicates;
-    private final Map<Class<?>, Schema> schemaMap = CollectionUtils.newConcurrentHashMap();
+    private final Map<Type, Schema> schemaMap = CollectionUtils.newConcurrentHashMap();
 
     private volatile RadixTree<Boolean> classFilter;
 
@@ -112,7 +116,7 @@ public final class SchemaResolver {
                             .setAdditionalPropertiesSchema(doResolveNestedType(argTypes[1], parameter));
                 }
 
-                return doResolveClass(clazz, parameter);
+                return doResolveClass(clazz, parameter, pType);
             }
         }
         if (type instanceof TypeVariable) {
@@ -130,6 +134,10 @@ public final class SchemaResolver {
     }
 
     private Schema doResolveClass(Class<?> clazz, ParameterMeta parameter) {
+        return doResolveClass(clazz, parameter, clazz);
+    }
+
+    private Schema doResolveClass(Class<?> clazz, ParameterMeta parameter, Type declaredType) {
         Schema schema = PrimitiveSchema.newSchemaOf(clazz);
         if (schema != null) {
             return schema;
@@ -143,14 +151,14 @@ public final class SchemaResolver {
             return schema.setItems(doResolveNestedType(clazz.getComponentType(), parameter));
         }
 
-        Schema existingSchema = schemaMap.get(clazz);
+        Schema existingSchema = schemaMap.get(declaredType);
         if (existingSchema != null) {
             return new Schema().setTargetSchema(existingSchema);
         }
 
         if (isClassExcluded(clazz)) {
             schema = OBJECT.newSchema().addExtension(Constants.X_JAVA_CLASS, TypeUtils.toTypeString(clazz));
-            schemaMap.put(clazz, schema);
+            schemaMap.put(declaredType, schema);
             return schema;
         }
 
@@ -164,7 +172,7 @@ public final class SchemaResolver {
                 break;
             } else {
                 schema = OBJECT.newSchema().addExtension(Constants.X_JAVA_CLASS, TypeUtils.toTypeString(clazz));
-                schemaMap.put(clazz, schema);
+                schemaMap.put(declaredType, schema);
                 return schema;
             }
         }
@@ -174,7 +182,7 @@ public final class SchemaResolver {
             for (Object value : clazz.getEnumConstants()) {
                 schema.addEnumeration(value);
             }
-            schemaMap.put(clazz, schema);
+            schemaMap.put(declaredType, schema);
             return schema.clone();
         }
 
@@ -184,12 +192,13 @@ public final class SchemaResolver {
             flatten = anno != null && anno.getBoolean("flatten");
         }
 
-        return new Schema().setTargetSchema(doResolveBeanClass(parameter.getToolKit(), clazz, flatten));
+        return new Schema().setTargetSchema(doResolveBeanClass(parameter.getToolKit(), clazz, flatten, declaredType));
     }
 
-    private Schema doResolveBeanClass(RestToolKit toolKit, Class<?> clazz, boolean flatten) {
+    private Schema doResolveBeanClass(RestToolKit toolKit, Class<?> clazz, boolean flatten, Type declaredType) {
         Schema beanSchema = OBJECT.newSchema().setJavaType(clazz);
-        schemaMap.put(clazz, beanSchema);
+        schemaMap.put(declaredType, beanSchema);
+        Map<TypeVariable<?>, Type> typeArguments = getTypeArguments(clazz, declaredType);
         BeanMeta beanMeta = new BeanMeta(toolKit, clazz, flatten);
         out:
         for (PropertyMeta property : beanMeta.getProperties()) {
@@ -213,18 +222,99 @@ public final class SchemaResolver {
                     continue;
                 }
             }
-            beanSchema.addProperty(property.getName(), resolve(property));
+            beanSchema.addProperty(property.getName(), resolve(resolvePropertyType(property, typeArguments)));
         }
 
         if (flatten) {
             return beanSchema;
         }
-        Class<?> superClass = clazz.getSuperclass();
-        if (superClass == null || superClass == Object.class || TypeUtils.isSystemType(superClass)) {
+        Type superType = clazz.getGenericSuperclass();
+        if (superType == null) {
             return beanSchema;
         }
+        if (superType instanceof Class) {
+            Class<?> superClass = (Class<?>) superType;
+            if (superClass == Object.class || TypeUtils.isSystemType(superClass)) {
+                return beanSchema;
+            }
+            return beanSchema.addAllOf(resolve(superClass));
+        }
+        Type resolvedSuperType = resolveType(superType, typeArguments);
+        if (resolvedSuperType instanceof Class) {
+            Class<?> superClass = (Class<?>) resolvedSuperType;
+            if (superClass == Object.class || TypeUtils.isSystemType(superClass)) {
+                return beanSchema;
+            }
+        }
+        return beanSchema.addAllOf(resolve(new TypeParameterMeta(toolKit, resolvedSuperType)));
+    }
 
-        return beanSchema.addAllOf(resolve(superClass));
+    private static ParameterMeta resolvePropertyType(PropertyMeta property, Map<TypeVariable<?>, Type> typeArguments) {
+        if (typeArguments.isEmpty()) {
+            return property;
+        }
+        Type propertyType = property.getGenericType();
+        Type resolvedType = resolveType(propertyType, typeArguments);
+        return resolvedType == propertyType ? property : new ResolvedParameterMeta(property, resolvedType);
+    }
+
+    private static Map<TypeVariable<?>, Type> getTypeArguments(Class<?> clazz, Type declaredType) {
+        if (!(declaredType instanceof ParameterizedType)) {
+            return Collections.emptyMap();
+        }
+        ParameterizedType parameterizedType = (ParameterizedType) declaredType;
+        if (parameterizedType.getRawType() != clazz) {
+            return Collections.emptyMap();
+        }
+        TypeVariable<?>[] typeParameters = clazz.getTypeParameters();
+        Type[] arguments = parameterizedType.getActualTypeArguments();
+        int length = typeParameters.length;
+        if (length == 0 || length != arguments.length) {
+            return Collections.emptyMap();
+        }
+        Map<TypeVariable<?>, Type> typeArguments = new LinkedHashMap<>(length);
+        for (int i = 0; i < length; i++) {
+            typeArguments.put(typeParameters[i], arguments[i]);
+        }
+        return typeArguments;
+    }
+
+    private static Type resolveType(Type type, Map<TypeVariable<?>, Type> typeArguments) {
+        if (typeArguments.isEmpty()) {
+            return type;
+        }
+        if (type instanceof TypeVariable) {
+            Type resolved = typeArguments.get(type);
+            if (resolved == null || resolved == type) {
+                return type;
+            }
+            return resolveType(resolved, typeArguments);
+        }
+        if (type instanceof ParameterizedType) {
+            ParameterizedType parameterizedType = (ParameterizedType) type;
+            Type[] arguments = parameterizedType.getActualTypeArguments();
+            Type[] resolvedArguments = null;
+            for (int i = 0; i < arguments.length; i++) {
+                Type resolved = resolveType(arguments[i], typeArguments);
+                if (resolved != arguments[i]) {
+                    if (resolvedArguments == null) {
+                        resolvedArguments = arguments.clone();
+                    }
+                    resolvedArguments[i] = resolved;
+                }
+            }
+            if (resolvedArguments == null) {
+                return type;
+            }
+            return new ResolvedParameterizedType(
+                    parameterizedType.getRawType(), resolvedArguments, parameterizedType.getOwnerType());
+        }
+        if (type instanceof GenericArrayType) {
+            Type componentType = ((GenericArrayType) type).getGenericComponentType();
+            Type resolvedComponentType = resolveType(componentType, typeArguments);
+            return resolvedComponentType == componentType ? type : new ResolvedGenericArrayType(resolvedComponentType);
+        }
+        return type;
     }
 
     private boolean isClassExcluded(Class<?> clazz) {
@@ -313,6 +403,129 @@ public final class SchemaResolver {
         @Override
         public Schema resolve(Type type) {
             return SchemaResolver.this.resolve(type);
+        }
+    }
+
+    private static final class ResolvedParameterMeta extends ParameterMeta {
+
+        private final ParameterMeta delegate;
+        private final Type genericType;
+        private final Class<?> type;
+
+        ResolvedParameterMeta(ParameterMeta delegate, Type genericType) {
+            super(delegate.getToolKit(), delegate.getName());
+            this.delegate = delegate;
+            this.genericType = genericType;
+            type = TypeUtils.getActualType(genericType);
+        }
+
+        @Override
+        public Class<?> getType() {
+            return type;
+        }
+
+        @Override
+        public Type getGenericType() {
+            return genericType;
+        }
+
+        @Override
+        protected AnnotatedElement getAnnotatedElement() {
+            return delegate.getAnnotatedElements().get(0);
+        }
+
+        @Override
+        public List<? extends AnnotatedElement> getAnnotatedElements() {
+            return delegate.getAnnotatedElements();
+        }
+    }
+
+    private static final class ResolvedParameterizedType implements ParameterizedType {
+
+        private final Type rawType;
+        private final Type[] actualTypeArguments;
+        private final Type ownerType;
+
+        ResolvedParameterizedType(Type rawType, Type[] actualTypeArguments, Type ownerType) {
+            this.rawType = rawType;
+            this.actualTypeArguments = actualTypeArguments;
+            this.ownerType = ownerType;
+        }
+
+        @Override
+        public Type[] getActualTypeArguments() {
+            return actualTypeArguments.clone();
+        }
+
+        @Override
+        public Type getRawType() {
+            return rawType;
+        }
+
+        @Override
+        public Type getOwnerType() {
+            return ownerType;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (obj == this) {
+                return true;
+            }
+            if (!(obj instanceof ParameterizedType)) {
+                return false;
+            }
+            ParameterizedType other = (ParameterizedType) obj;
+            return Objects.equals(rawType, other.getRawType())
+                    && Objects.equals(ownerType, other.getOwnerType())
+                    && Arrays.equals(actualTypeArguments, other.getActualTypeArguments());
+        }
+
+        @Override
+        public int hashCode() {
+            return Arrays.hashCode(actualTypeArguments) ^ Objects.hashCode(ownerType) ^ Objects.hashCode(rawType);
+        }
+
+        @Override
+        public String toString() {
+            StringBuilder builder = new StringBuilder(rawType.getTypeName()).append('<');
+            for (int i = 0; i < actualTypeArguments.length; i++) {
+                if (i > 0) {
+                    builder.append(", ");
+                }
+                builder.append(actualTypeArguments[i].getTypeName());
+            }
+            return builder.append('>').toString();
+        }
+    }
+
+    private static final class ResolvedGenericArrayType implements GenericArrayType {
+
+        private final Type genericComponentType;
+
+        ResolvedGenericArrayType(Type genericComponentType) {
+            this.genericComponentType = genericComponentType;
+        }
+
+        @Override
+        public Type getGenericComponentType() {
+            return genericComponentType;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            return obj instanceof GenericArrayType
+                    && genericComponentType.equals(((GenericArrayType) obj).getGenericComponentType());
+        }
+
+        @Override
+        public int hashCode() {
+            return genericComponentType.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return genericComponentType.getTypeName() + "[]";
         }
     }
 }

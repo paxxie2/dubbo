@@ -51,5 +51,16 @@ class OpenAPISchemaAnnotationTest {
         assertEquals("result code", properties.get("code").getDescription());
         assertEquals("0", properties.get("code").getExample());
         assertEquals("result message", properties.get("message").getDescription());
+
+        Schema pageResponse = schemas.get("PageResponse");
+        assertNotNull(pageResponse, () -> "Missing PageResponse schema, schemas: " + schemas.keySet());
+        assertEquals("total records", pageResponse.getProperties().get("total").getDescription());
+        assertEquals("record list", pageResponse.getProperties().get("records").getDescription());
+
+        Schema accessLogRes = schemas.get("AccessLogRes");
+        assertNotNull(accessLogRes, () -> "Missing AccessLogRes schema, schemas: " + schemas.keySet());
+        assertEquals(
+                "operator user name",
+                accessLogRes.getProperties().get("username").getDescription());
     }
 }
