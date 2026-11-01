@@ -242,13 +242,20 @@ public final class SwaggerOpenAPIDefinitionResolver
         schema.setNullable(anno.nullable() ? Boolean.TRUE : null);
         schema.setDeprecated(anno.deprecated() ? Boolean.TRUE : null);
 
-        return chain.resolve(parameter, context);
+        return schema;
     }
 
     @Override
     public Boolean acceptProperty(BeanMeta bean, PropertyMeta property) {
         AnnotationMeta<io.swagger.v3.oas.annotations.media.Schema> meta =
-                bean.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class);
+                property.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class);
+        if (meta != null && meta.getAnnotation().hidden()) {
+            return false;
+        }
+        if (property.isHierarchyAnnotated(Hidden.class)) {
+            return false;
+        }
+        meta = bean.getAnnotation(io.swagger.v3.oas.annotations.media.Schema.class);
         if (meta == null) {
             return null;
         }
