@@ -185,12 +185,12 @@ public final class BasicOpenAPIDefinitionResolver
         setBoolValue(annoMeta, "deprecated", schema::setDeprecated);
         schema.setExtensions(Helper.toProperties(annoMeta.getStringArray("extensions")));
 
-        return chain.resolve(parameter, context);
+        return schema;
     }
 
     @Override
     public Boolean acceptProperty(BeanMeta bean, PropertyMeta property) {
         AnnotationMeta<?> annoMeta = property.getAnnotation(Annotations.Schema);
-        return annoMeta == null ? null : annoMeta.getBoolean(HIDDEN);
+        return annoMeta == null ? null : (annoMeta.getBoolean(HIDDEN) ? Boolean.FALSE : null);
     }
 }
