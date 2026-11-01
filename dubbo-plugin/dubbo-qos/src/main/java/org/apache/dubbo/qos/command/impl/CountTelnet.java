@@ -65,17 +65,20 @@ public class CountTelnet implements BaseCommand {
         }
         String method;
         String times;
+        int timesIndex;
         if (service == null || service.length() == 0) {
             service = args[0];
             method = args.length > 1 ? args[1] : null;
+            timesIndex = 2;
         } else {
             method = args.length > 0 ? args[0] : null;
+            timesIndex = 1;
         }
         if (StringUtils.isNumber(method)) {
             times = method;
             method = null;
         } else {
-            times = args.length > 2 ? args[2] : "1";
+            times = args.length > timesIndex ? args[timesIndex] : "1";
         }
         if (!StringUtils.isNumber(times)) {
             return "Illegal times " + times + ", must be integer.";
