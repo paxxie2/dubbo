@@ -36,6 +36,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 class CacheFilterTest {
     private RpcInvocation invocation;
@@ -137,5 +139,37 @@ class CacheFilterTest {
         Result result2 = cacheFilter.invoke(invoker2, invocation);
         Assertions.assertNull(result1.getValue());
         Assertions.assertNull(result2.getValue());
+    }
+
+    @ParameterizedTest
+    @MethodSource("cacheFactories")
+    void testCacheKeyPreservesCommaSeparatedArgumentBoundaries(String cacheType, CacheFactory factory) {
+        CacheFilter filter = new CacheFilter();
+        URL url = URL.valueOf("test://test:11/cache-key?cache=" + cacheType);
+        Invoker<?> target = mock(Invoker.class);
+        given(target.getUrl()).willReturn(url);
+
+        RpcInvocation first = invocation("a,b", "c");
+        RpcInvocation second = invocation("a", "b,c");
+        given(target.invoke(first)).willReturn(AsyncRpcResult.newDefaultAsyncResult("first", first));
+        given(target.invoke(second)).willReturn(AsyncRpcResult.newDefaultAsyncResult("second", second));
+        filter.setCacheFactory(factory);
+
+        Assertions.assertEquals("first", filter.invoke(target, first).getValue());
+        Assertions.assertEquals("second", filter.invoke(target, second).getValue());
+        Assertions.assertEquals("first", filter.invoke(target, first).getValue());
+        Assertions.assertEquals("second", filter.invoke(target, second).getValue());
+
+        int expectedInvocations = "lru".equals(cacheType) ? 2 : 1;
+        verify(target, times(expectedInvocations)).invoke(first);
+        verify(target, times(expectedInvocations)).invoke(second);
+    }
+
+    private static RpcInvocation invocation(String first, String second) {
+        RpcInvocation invocation = new RpcInvocation();
+        invocation.setMethodName("combine");
+        invocation.setParameterTypes(new Class<?>[] {String.class, String.class});
+        invocation.setArguments(new Object[] {first, second});
+        return invocation;
     }
 }
