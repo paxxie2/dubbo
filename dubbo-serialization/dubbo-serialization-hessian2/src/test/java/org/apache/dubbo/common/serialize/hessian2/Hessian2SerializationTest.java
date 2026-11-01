@@ -28,8 +28,13 @@ import org.apache.dubbo.rpc.model.FrameworkModel;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -653,5 +658,85 @@ class Hessian2SerializationTest {
             Assertions.assertInstanceOf(Map.class, objectInput.readObject());
             frameworkModel.destroy();
         }
+    }
+
+    @Test
+    void testReadObjectWithGenericTypeWithoutNarrowElement() throws IOException, ClassNotFoundException {
+        // Generic types without Byte/Short/Float elements must keep the plain deserialization path,
+        // so their elements and element runtime types stay exactly as before.
+        FrameworkModel frameworkModel = new FrameworkModel();
+        try {
+            Serialization serialization =
+                    frameworkModel.getExtensionLoader(Serialization.class).getExtension("hessian2");
+            URL url = URL.valueOf("").setScopeModel(frameworkModel);
+
+            // List<String>
+            List<String> strings = new ArrayList<>(Arrays.asList("a", "b", "c"));
+            List<?> decodedStrings = (List<?>) readWithGenericType(
+                    serialization, url, strings, List.class, parameterizedType(List.class, String.class));
+            Assertions.assertEquals(strings, decodedStrings);
+            for (Object element : decodedStrings) {
+                Assertions.assertInstanceOf(String.class, element);
+            }
+
+            // List<Integer> must not be narrowed to another numeric type
+            List<Integer> integers = new ArrayList<>(Arrays.asList(1, 2, -3));
+            List<?> decodedIntegers = (List<?>) readWithGenericType(
+                    serialization, url, integers, List.class, parameterizedType(List.class, Integer.class));
+            Assertions.assertEquals(integers, decodedIntegers);
+            for (Object element : decodedIntegers) {
+                Assertions.assertInstanceOf(Integer.class, element);
+            }
+
+            // Map<String, List<String>>
+            Map<String, List<String>> nestedStrings = new LinkedHashMap<>();
+            nestedStrings.put("k1", new ArrayList<>(Arrays.asList("a", "b")));
+            Map<?, ?> decodedNestedStrings = (Map<?, ?>) readWithGenericType(
+                    serialization,
+                    url,
+                    nestedStrings,
+                    Map.class,
+                    parameterizedType(Map.class, String.class, parameterizedType(List.class, String.class)));
+            Assertions.assertEquals(nestedStrings, decodedNestedStrings);
+            for (Object value : decodedNestedStrings.values()) {
+                for (Object element : (List<?>) value) {
+                    Assertions.assertInstanceOf(String.class, element);
+                }
+            }
+        } finally {
+            frameworkModel.destroy();
+        }
+    }
+
+    private static Object readWithGenericType(
+            Serialization serialization, URL url, Object value, Class<?> declaredClass, Type declaredType)
+            throws IOException, ClassNotFoundException {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        ObjectOutput objectOutput = serialization.serialize(url, outputStream);
+        objectOutput.writeObject(value);
+        objectOutput.flushBuffer();
+
+        ByteArrayInputStream inputStream = new ByteArrayInputStream(outputStream.toByteArray());
+        ObjectInput objectInput = serialization.deserialize(url, inputStream);
+        return objectInput.readObject(declaredClass, declaredType);
+    }
+
+    private static ParameterizedType parameterizedType(Type rawType, Type... typeArguments) {
+        return new ParameterizedType() {
+            @Override
+            public Type[] getActualTypeArguments() {
+                return typeArguments;
+            }
+
+            @Override
+            public Type getRawType() {
+                return rawType;
+            }
+
+            @Override
+            public Type getOwnerType() {
+                return null;
+            }
+        };
     }
 }
