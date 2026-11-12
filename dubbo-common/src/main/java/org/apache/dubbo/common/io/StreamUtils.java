@@ -38,6 +38,7 @@ public final class StreamUtils {
             private int mPosition = 0;
             private int mMark = 0;
             private final int mLimit = limit;
+            // A source EOF is final for this wrapper until reset() rewinds the source.
             private boolean mEof = false;
 
             @Override
@@ -248,27 +249,12 @@ public final class StreamUtils {
     }
 
     public static void skipUnusedStream(InputStream is) throws IOException {
-        // available() only estimates the bytes readable without blocking and skip() may
-        // consume fewer bytes than requested, so retry while skip() keeps progressing.
-        long available;
-        while ((available = is.available()) > 0) {
-            if (is.skip(available) <= 0) {
-                break;
-            }
-        }
-
-        // A stream may report zero availability (or stop skipping early) while bytes remain,
-        // so drain the remainder through read() until EOF.
+        // InputStream.available() only estimates the bytes readable without blocking and
+        // skip() may consume fewer bytes than requested, so drain the remainder by reading
+        // until EOF. This also covers streams that report zero availability while holding data.
         byte[] buffer = new byte[1024];
-        int read;
-        while ((read = is.read(buffer)) != -1) {
-            if (read == 0) {
-                // A bulk read that returns 0 makes no progress; a single-byte read either
-                // consumes data or reports EOF, so the loop cannot spin forever.
-                if (is.read() == -1) {
-                    return;
-                }
-            }
+        while (is.read(buffer) != -1) {
+            // Keep reading until the stream reports EOF.
         }
     }
 
