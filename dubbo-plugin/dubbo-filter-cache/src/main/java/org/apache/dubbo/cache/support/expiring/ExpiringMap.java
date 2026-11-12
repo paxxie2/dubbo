@@ -87,13 +87,24 @@ public class ExpiringMap<K, V> implements Map<K, V> {
             long timeIdle = System.currentTimeMillis() - object.getLastAccessTime();
             int timeToLive = expireThread.getTimeToLive();
             if (timeToLive > 0 && timeIdle >= timeToLive * 1000L) {
-                delegateMap.remove(object.getKey());
+                removeObserved(object);
                 return null;
             }
             object.setLastAccessTime(System.currentTimeMillis());
             return object.getValue();
         }
         return null;
+    }
+
+    /**
+     * Removes the mapping only if it still points at the expiry object that was observed as stale.
+     * Another thread may have replaced the value under the same key since it was observed, and
+     * such a fresh value must be preserved by the expiration.
+     *
+     * @param observed the expiry object that was observed to be stale
+     */
+    private void removeObserved(ExpiryObject observed) {
+        delegateMap.computeIfPresent(observed.getKey(), (key, current) -> current == observed ? null : current);
     }
 
     @Override
@@ -294,7 +305,7 @@ public class ExpiringMap<K, V> implements Map<K, V> {
             for (ExpiryObject o : delegateMap.values()) {
                 long timeIdle = timeNow - o.getLastAccessTime();
                 if (timeIdle >= timeToLiveMillis) {
-                    delegateMap.remove(o.getKey());
+                    removeObserved(o);
                 }
             }
         }
