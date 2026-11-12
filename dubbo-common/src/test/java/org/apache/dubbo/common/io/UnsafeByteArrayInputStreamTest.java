@@ -91,4 +91,24 @@ class UnsafeByteArrayInputStreamTest {
         assertThat(skip, is(0L));
         assertThat(stream.position(), is(0));
     }
+
+    @Test
+    void testSkipLargeStopsAtSliceEnd() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream(new byte[] {10, 20, 30, 40}, 1, 2);
+
+        assertThat(stream.read(), is(20));
+        assertThat(stream.skip(Long.MAX_VALUE), is(1L));
+        assertThat(stream.available(), is(0));
+        assertThat(stream.read(), is(-1));
+    }
+
+    @Test
+    void testSkipBeyondRemainingSlice() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
+
+        assertThat(stream.skip(1), is(1L));
+        assertThat(stream.skip(100), is(2L));
+        assertThat(stream.available(), is(0));
+        assertThat(stream.skip(1), is(0L));
+    }
 }
