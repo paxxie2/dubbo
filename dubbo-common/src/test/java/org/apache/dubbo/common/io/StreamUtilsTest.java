@@ -343,6 +343,52 @@ class StreamUtilsTest {
         assertEquals(0, is.available());
     }
 
+    @Test
+    void testLimitedInputStreamWithZeroLimit() throws Exception {
+        InputStream source = new ByteArrayInputStream("0123456789".getBytes(StandardCharsets.UTF_8));
+        InputStream is = StreamUtils.limitedInputStream(source, 0);
+
+        assertEquals(0, is.available());
+        assertEquals(-1, is.read());
+        assertEquals(0, is.skip(1));
+        assertEquals((int) '0', source.read());
+    }
+
+    @Test
+    void testLimitedInputStreamWithNegativeLimit() throws Exception {
+        InputStream is =
+                StreamUtils.limitedInputStream(new ByteArrayInputStream("01".getBytes(StandardCharsets.UTF_8)), -1);
+
+        assertEquals(0, is.available());
+        assertEquals(-1, is.read());
+        assertEquals(0, is.skip(1));
+    }
+
+    @Test
+    void testLimitedInputStreamReadZeroLengthAtEof() throws Exception {
+        InputStream is =
+                StreamUtils.limitedInputStream(new ByteArrayInputStream("01".getBytes(StandardCharsets.UTF_8)), 10);
+
+        byte[] bytes = new byte[2];
+        assertEquals(2, is.read(bytes));
+        assertEquals(-1, is.read());
+        assertEquals(0, is.read(bytes, 0, 0));
+    }
+
+    @Test
+    void testLimitedInputStreamResetAfterSourceEofClearsEof() throws Exception {
+        InputStream is =
+                StreamUtils.limitedInputStream(new ByteArrayInputStream("ab".getBytes(StandardCharsets.UTF_8)), 10);
+
+        is.mark(0);
+        assertEquals((int) 'a', is.read());
+        assertEquals((int) 'b', is.read());
+        assertEquals(-1, is.read());
+
+        is.reset();
+        assertEquals((int) 'a', is.read());
+    }
+
     /**
      * A stream whose real contents are invisible to {@code available()} and whose
      * {@code skip} cannot make progress, so only {@code read} reveals the bytes.
