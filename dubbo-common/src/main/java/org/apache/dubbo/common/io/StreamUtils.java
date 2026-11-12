@@ -37,15 +37,23 @@ public final class StreamUtils {
         return new InputStream() {
             private int mPosition = 0;
             private int mMark = 0;
-            private final int mLimit = Math.min(limit, is.available());
+            private final int mLimit = limit;
+            private boolean mEof = false;
 
             @Override
             public int read() throws IOException {
-                if (mPosition < mLimit) {
-                    mPosition++;
-                    return is.read();
+                if (mEof || mPosition >= mLimit) {
+                    return -1;
                 }
-                return -1;
+
+                int b = is.read();
+                if (b == -1) {
+                    mEof = true;
+                    return -1;
+                }
+
+                mPosition++;
+                return b;
             }
 
             @Override
@@ -58,41 +66,47 @@ public final class StreamUtils {
                     throw new IndexOutOfBoundsException();
                 }
 
-                if (mPosition >= mLimit) {
-                    return -1;
-                }
-
-                if (mPosition + len > mLimit) {
-                    len = mLimit - mPosition;
-                }
-
-                if (len <= 0) {
+                if (len == 0) {
                     return 0;
                 }
 
-                is.read(b, off, len);
-                mPosition += len;
-                return len;
+                if (mEof || mPosition >= mLimit) {
+                    return -1;
+                }
+
+                int read = is.read(b, off, Math.min(len, mLimit - mPosition));
+                if (read == -1) {
+                    mEof = true;
+                    return -1;
+                }
+
+                mPosition += read;
+                return read;
             }
 
             @Override
             public long skip(long len) throws IOException {
-                if (mPosition + len > mLimit) {
-                    len = mLimit - mPosition;
-                }
-
-                if (len <= 0) {
+                if (len <= 0 || mEof || mPosition >= mLimit) {
                     return 0;
                 }
 
-                is.skip(len);
-                mPosition += len;
-                return len;
+                long remaining = mLimit - mPosition;
+                long skipped = Math.min(is.skip(Math.min(len, remaining)), remaining);
+                if (skipped <= 0) {
+                    return 0;
+                }
+
+                mPosition += (int) skipped;
+                return skipped;
             }
 
             @Override
-            public int available() {
-                return mLimit - mPosition;
+            public int available() throws IOException {
+                if (mEof || mPosition >= mLimit) {
+                    return 0;
+                }
+
+                return Math.min(mLimit - mPosition, is.available());
             }
 
             @Override
@@ -110,6 +124,7 @@ public final class StreamUtils {
             public synchronized void reset() throws IOException {
                 is.reset();
                 mPosition = mMark;
+                mEof = false;
             }
 
             @Override
@@ -233,8 +248,27 @@ public final class StreamUtils {
     }
 
     public static void skipUnusedStream(InputStream is) throws IOException {
-        if (is.available() > 0) {
-            is.skip(is.available());
+        // available() only estimates the bytes readable without blocking and skip() may
+        // consume fewer bytes than requested, so retry while skip() keeps progressing.
+        long available;
+        while ((available = is.available()) > 0) {
+            if (is.skip(available) <= 0) {
+                break;
+            }
+        }
+
+        // A stream may report zero availability (or stop skipping early) while bytes remain,
+        // so drain the remainder through read() until EOF.
+        byte[] buffer = new byte[1024];
+        int read;
+        while ((read = is.read(buffer)) != -1) {
+            if (read == 0) {
+                // A bulk read that returns 0 makes no progress; a single-byte read either
+                // consumes data or reports EOF, so the loop cannot spin forever.
+                if (is.read() == -1) {
+                    return;
+                }
+            }
         }
     }
 
