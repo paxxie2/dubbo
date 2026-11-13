@@ -91,4 +91,60 @@ class UnsafeByteArrayInputStreamTest {
         assertThat(skip, is(0L));
         assertThat(stream.position(), is(0));
     }
+
+    @Test
+    void testSkipLongMaxValueStopsAtSliceEnd() {
+        byte[] data = {10, 20, 30, 40};
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream(data, 1, 2);
+
+        assertThat(stream.read(), is(20));
+        assertThat(stream.skip(Long.MAX_VALUE), is(1L));
+        assertThat(stream.position(), is(3));
+        assertThat(stream.available(), is(0));
+        assertThat(stream.read(), is(-1));
+    }
+
+    @Test
+    void testSkipLongMaxValueOnFullStream() {
+        byte[] data = {10, 20, 30, 40};
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream(data);
+
+        assertThat(stream.skip(Long.MAX_VALUE), is(4L));
+        assertThat(stream.position(), is(4));
+        assertThat(stream.available(), is(0));
+        assertThat(stream.read(), is(-1));
+    }
+
+    @Test
+    void testSkipAtEndOfStream() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream(new byte[] {1, 2});
+
+        assertThat(stream.skip(2), is(2L));
+        assertThat(stream.skip(Long.MAX_VALUE), is(0L));
+        assertThat(stream.position(), is(2));
+        assertThat(stream.read(), is(-1));
+    }
+
+    @Test
+    void testSkipNegativeAndZeroDoNotMove() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
+
+        assertThat(stream.skip(-1), is(0L));
+        assertThat(stream.skip(0), is(0L));
+        assertThat(stream.position(), is(0));
+        assertThat(stream.available(), is(3));
+        assertThat(stream.read(), is((int) 'a'));
+    }
+
+    @Test
+    void testSkipOrdinaryWithinSlice() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abcd".getBytes(), 1, 2);
+
+        assertThat(stream.skip(1), is(1L));
+        assertThat(stream.position(), is(2));
+        assertThat(stream.available(), is(1));
+        assertThat(stream.read(), is((int) 'c'));
+        assertThat(stream.read(), is(-1));
+        assertThat(stream.skip(1), is(0L));
+    }
 }
