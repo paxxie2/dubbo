@@ -84,6 +84,82 @@ class UnsafeByteArrayInputStreamTest {
     }
 
     @Test
+    void testZeroLengthReadOnEmptyStream() throws IOException {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream(new byte[0]);
+        byte[] target = new byte[1];
+
+        assertThat(stream.read(new byte[0], 0, 0), is(0));
+        assertThat(stream.read(target, 0, 0), is(0));
+        assertThat(stream.read(target, target.length, 0), is(0));
+        assertThat(stream.read(new byte[0]), is(0));
+        assertThat(stream.position(), is(0));
+        assertThat(stream.available(), is(0));
+        assertThat(stream.read(target), is(-1));
+    }
+
+    @Test
+    void testZeroLengthReadAtEndOfStream() throws IOException {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
+        byte[] one = new byte[1];
+        assertThat(stream.read(one), is(1));
+        assertThat(stream.read(one), is(1));
+        assertThat(stream.read(one), is(1));
+        assertThat(stream.read(one), is(-1));
+
+        byte[] target = {(byte) 0x11, (byte) 0x22};
+        assertThat(stream.read(target, 0, 0), is(0));
+        assertThat(stream.read(target, target.length, 0), is(0));
+        assertThat(stream.read(new byte[0]), is(0));
+        assertThat(stream.position(), is(3));
+        assertThat(stream.available(), is(0));
+        Assertions.assertArrayEquals(new byte[] {(byte) 0x11, (byte) 0x22}, target);
+        assertThat(stream.read(one), is(-1));
+    }
+
+    @Test
+    void testZeroLengthReadOnBoundedSlice() throws IOException {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes(), 1, 2);
+        assertThat(stream.read(), is((int) 'b'));
+        assertThat(stream.read(), is((int) 'c'));
+        assertThat(stream.read(), is(-1));
+        assertThat(stream.read(new byte[2], 1, 0), is(0));
+        assertThat(stream.read(new byte[0]), is(0));
+        assertThat(stream.position(), is(3));
+
+        UnsafeByteArrayInputStream emptySlice = new UnsafeByteArrayInputStream("abc".getBytes(), 1, 0);
+        assertThat(emptySlice.read(new byte[1], 0, 0), is(0));
+        assertThat(emptySlice.position(), is(1));
+    }
+
+    @Test
+    void testZeroLengthReadKeepsDestinationAndPosition() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
+        byte[] target = {(byte) 0x01, (byte) 0x02, (byte) 0x03};
+
+        assertThat(stream.read(target, 1, 0), is(0));
+        assertThat(stream.position(), is(0));
+        Assertions.assertArrayEquals(new byte[] {(byte) 0x01, (byte) 0x02, (byte) 0x03}, target);
+
+        stream.position(3);
+        assertThat(stream.read(target, 1, 0), is(0));
+        assertThat(stream.position(), is(3));
+        Assertions.assertArrayEquals(new byte[] {(byte) 0x01, (byte) 0x02, (byte) 0x03}, target);
+    }
+
+    @Test
+    void testArgumentValidationPrecedesEndOfStreamCheck() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream(new byte[0]);
+        byte[] target = new byte[1];
+
+        Assertions.assertThrows(NullPointerException.class, () -> stream.read(null, 0, 0));
+        Assertions.assertThrows(NullPointerException.class, () -> stream.read(null, 0, 1));
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> stream.read(target, -1, 0));
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> stream.read(target, 0, -1));
+        Assertions.assertThrows(IndexOutOfBoundsException.class, () -> stream.read(target, target.length + 1, 0));
+        assertThat(stream.position(), is(0));
+    }
+
+    @Test
     void testSkipZero() {
         UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
         long skip = stream.skip(-1);
