@@ -54,6 +54,10 @@ public class UnsafeByteArrayInputStream extends InputStream {
         if (off < 0 || len < 0 || len > b.length - off) {
             throw new IndexOutOfBoundsException();
         }
+        // A zero-length read is always a valid no-op, even at end of stream.
+        if (len == 0) {
+            return 0;
+        }
         if (mPosition >= mLimit) {
             return -1;
         }
