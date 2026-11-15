@@ -17,6 +17,11 @@
 package org.apache.dubbo.common.io;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -90,5 +95,17 @@ class UnsafeByteArrayInputStreamTest {
 
         assertThat(skip, is(0L));
         assertThat(stream.position(), is(0));
+    }
+
+    @Test
+    void testSourceEndsWithShadowMarker() throws IOException {
+        Path source = Paths.get("src/main/java/org/apache/dubbo/common/io/UnsafeByteArrayInputStream.java");
+        if (!Files.exists(source)) {
+            source = Paths.get("dubbo-common/src/main/java/org/apache/dubbo/common/io/UnsafeByteArrayInputStream.java");
+        }
+        String marker = "// hephi-shadow-d76c8f1";
+        List<String> lines = Files.readAllLines(source, StandardCharsets.UTF_8);
+        assertThat(lines.get(lines.size() - 1), is(marker));
+        assertThat(lines.stream().filter(marker::equals).count(), is(1L));
     }
 }
