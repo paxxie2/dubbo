@@ -91,4 +91,40 @@ class UnsafeByteArrayInputStreamTest {
         assertThat(skip, is(0L));
         assertThat(stream.position(), is(0));
     }
+
+    @Test
+    void testSkipMaxValueFromNonZeroPosition() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
+        assertThat(stream.read(), is((int) 'a'));
+
+        long skipped = stream.skip(Long.MAX_VALUE);
+
+        assertThat(skipped, is(2L));
+        assertThat(stream.position(), is(3));
+        assertThat(stream.available(), is(0));
+    }
+
+    @Test
+    void testSkipMaxValueToSliceEnd() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abcdef".getBytes(), 2, 3);
+        assertThat(stream.read(), is((int) 'c'));
+
+        long skipped = stream.skip(Long.MAX_VALUE);
+
+        assertThat(skipped, is(2L));
+        assertThat(stream.position(), is(5));
+        assertThat(stream.available(), is(0));
+        assertThat(stream.read(), is(-1));
+    }
+
+    @Test
+    void testSkipNonPositiveDoesNotAdvancePosition() {
+        UnsafeByteArrayInputStream stream = new UnsafeByteArrayInputStream("abc".getBytes());
+        assertThat(stream.read(), is((int) 'a'));
+
+        assertThat(stream.skip(0), is(0L));
+        assertThat(stream.skip(-5), is(0L));
+        assertThat(stream.position(), is(1));
+        assertThat(stream.available(), is(2));
+    }
 }
