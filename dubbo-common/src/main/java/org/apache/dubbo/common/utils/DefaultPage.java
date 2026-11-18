@@ -41,6 +41,9 @@ public class DefaultPage<T> implements Page<T>, Serializable {
     private final boolean hasNext;
 
     public DefaultPage(int requestOffset, int pageSize, List<T> data, int totalSize) {
+        if (pageSize <= 0) {
+            throw new IllegalArgumentException("pageSize must be positive: " + pageSize);
+        }
         this.requestOffset = requestOffset;
         this.pageSize = pageSize;
         this.data = data;
