@@ -42,6 +42,15 @@ class AtomicPositiveIntegerTest {
     }
 
     @Test
+    void testConstructorWithNegativeInitialValue() {
+        IllegalArgumentException exception =
+                Assertions.assertThrows(IllegalArgumentException.class, () -> new AtomicPositiveInteger(-1));
+        assertThat(exception.getMessage(), allOf(containsString("initial value"), containsString("< 0")));
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> new AtomicPositiveInteger(Integer.MIN_VALUE));
+    }
+
+    @Test
     void testSet() {
         i1.set(100);
         assertEquals(100, i1.get());

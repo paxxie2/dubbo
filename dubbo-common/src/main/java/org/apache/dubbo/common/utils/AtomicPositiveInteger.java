@@ -31,6 +31,9 @@ public class AtomicPositiveInteger extends Number {
     public AtomicPositiveInteger() {}
 
     public AtomicPositiveInteger(int initialValue) {
+        if (initialValue < 0) {
+            throw new IllegalArgumentException("initial value " + initialValue + " < 0");
+        }
         INDEX_UPDATER.set(this, initialValue);
     }
 
