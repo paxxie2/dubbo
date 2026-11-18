@@ -41,4 +41,11 @@ class DefaultPageTest {
         Assertions.assertEquals(page.getTotalPages(), 5);
         Assertions.assertTrue(page.hasNext());
     }
+
+    @Test
+    void testInvalidPageSize() {
+        List<Integer> data = asList(1, 2, 3);
+        Assertions.assertThrows(IllegalArgumentException.class, () -> new DefaultPage<>(0, 0, data, data.size()));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> new DefaultPage<>(0, -1, data, data.size()));
+    }
 }
