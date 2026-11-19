@@ -18,6 +18,7 @@ package org.apache.dubbo.rpc.cluster.router.mesh.rule.virtualservice.match;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -54,5 +55,30 @@ class AddressMatchTest {
         addressMatch.setCird("234e:0:4567:0:0:0:3d:*");
 
         assertTrue(addressMatch.isMatch("234e:0:4567::3d:ff"));
+    }
+
+    @Test
+    void cidrAccessorsAndBackwardCompatibility() {
+        AddressMatch addressMatch = new AddressMatch();
+        addressMatch.setCidr("192.168.1.*:90");
+        assertEquals("192.168.1.*:90", addressMatch.getCidr());
+        assertEquals("192.168.1.*:90", addressMatch.getCird());
+        assertTrue(addressMatch.isMatch("192.168.1.63:90"));
+        assertFalse(addressMatch.isMatch("192.168.1.63:80"));
+
+        addressMatch.setCird("10.0.0.*");
+        assertEquals("10.0.0.*", addressMatch.getCidr());
+        assertTrue(addressMatch.isMatch("10.0.0.5"));
+
+        // Verify legacy subclass overriding getCird() still works with getCidr() and isMatch()
+        AddressMatch legacySubclass = new AddressMatch() {
+            @Override
+            public String getCird() {
+                return "172.16.0.*";
+            }
+        };
+        assertEquals("172.16.0.*", legacySubclass.getCidr());
+        assertTrue(legacySubclass.isMatch("172.16.0.9"));
+        assertFalse(legacySubclass.isMatch("10.0.0.9"));
     }
 }

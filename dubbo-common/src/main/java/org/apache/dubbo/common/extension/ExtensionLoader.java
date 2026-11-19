@@ -58,6 +58,7 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -785,6 +786,7 @@ public class ExtensionLoader<T> {
                 instance = postProcessAfterInitialization(instance, name);
             }
 
+            List<Class<?>> appliedWrappers = logger.isDebugEnabled() ? new ArrayList<>() : null;
             if (wrap) {
                 List<Class<?>> wrapperClassesList = new ArrayList<>();
                 if (cachedWrapperClasses != null) {
@@ -805,6 +807,9 @@ public class ExtensionLoader<T> {
                             instance = postProcessBeforeInitialization(instance, name);
                             injectExtension(instance);
                             instance = postProcessAfterInitialization(instance, name);
+                            if (appliedWrappers != null) {
+                                appliedWrappers.add(wrapperClass);
+                            }
                         }
                     }
                 }
@@ -813,6 +818,18 @@ public class ExtensionLoader<T> {
             // Warning: After an instance of Lifecycle is wrapped by cachedWrapperClasses, it may not still be Lifecycle
             // instance, this application may not invoke the lifecycle.initialize hook.
             initExtension(instance);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Loaded extension instance, type="
+                        + type.getName()
+                        + ", name="
+                        + name
+                        + ", instanceClass="
+                        + instance.getClass().getName()
+                        + ", wrap="
+                        + wrap
+                        + ", wrapperClasses="
+                        + formatClassNames(appliedWrappers));
+            }
             return instance;
         } catch (Throwable t) {
             throw new IllegalStateException(
@@ -988,6 +1005,17 @@ public class ExtensionLoader<T> {
         checkDestroyed();
         cacheDefaultExtensionName();
 
+        boolean debugEnabled = logger.isDebugEnabled();
+        long startTime = debugEnabled ? System.currentTimeMillis() : 0L;
+        if (debugEnabled) {
+            logger.debug("Start loading extension classes, type="
+                    + type.getName()
+                    + ", scopeModel="
+                    + scopeModel
+                    + ", defaultName="
+                    + cachedDefaultName);
+        }
+
         Map<String, Class<?>> extensionClasses = new HashMap<>();
 
         for (LoadingStrategy strategy : strategies) {
@@ -997,6 +1025,22 @@ public class ExtensionLoader<T> {
             if (this.type == ExtensionInjector.class) {
                 loadDirectory(extensionClasses, strategy, ExtensionFactory.class.getName());
             }
+        }
+
+        if (debugEnabled) {
+            long costInMillis = System.currentTimeMillis() - startTime;
+            logger.debug("Finished loading extension classes, type="
+                    + type.getName()
+                    + ", count="
+                    + extensionClasses.size()
+                    + ", adaptiveClass="
+                    + (cachedAdaptiveClass == null ? "null" : cachedAdaptiveClass.getName())
+                    + ", wrapperClasses="
+                    + formatClassNames(cachedWrapperClasses)
+                    + ", names="
+                    + extensionClasses.keySet()
+                    + ", costInMillis="
+                    + costInMillis);
         }
 
         return extensionClasses;
@@ -1276,16 +1320,40 @@ public class ExtensionLoader<T> {
                             + clazz.getName() + "), class " + clazz.getName() + " is not subtype of interface.");
         }
 
-        boolean isActive = loadClassIfActive(classLoader, clazz);
+        List<String> missingOnClass = findMissingOnClass(classLoader, clazz);
 
-        if (!isActive) {
+        if (!missingOnClass.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Skip inactive extension class, type="
+                        + type.getName()
+                        + ", class="
+                        + clazz.getName()
+                        + ", missingOnClass="
+                        + missingOnClass);
+            }
             return;
         }
 
         if (clazz.isAnnotationPresent(Adaptive.class)) {
             cacheAdaptiveClass(clazz, overridden);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Loaded SPI adaptive class, type="
+                        + type.getName()
+                        + ", names=[], class="
+                        + clazz.getName()
+                        + ", resourceURL="
+                        + resourceURL);
+            }
         } else if (isWrapperClass(clazz)) {
             cacheWrapperClass(clazz);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Loaded SPI wrapper class, type="
+                        + type.getName()
+                        + ", names=[], class="
+                        + clazz.getName()
+                        + ", resourceURL="
+                        + resourceURL);
+            }
         } else {
             if (StringUtils.isEmpty(name)) {
                 name = findAnnotationName(clazz);
@@ -1302,15 +1370,25 @@ public class ExtensionLoader<T> {
                     cacheName(clazz, n);
                     saveInExtensionClass(extensionClasses, clazz, n, overridden);
                 }
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Loaded SPI extension class, type="
+                            + type.getName()
+                            + ", names="
+                            + Arrays.toString(names)
+                            + ", class="
+                            + clazz.getName()
+                            + ", resourceURL="
+                            + resourceURL);
+                }
             }
         }
     }
 
-    private boolean loadClassIfActive(ClassLoader classLoader, Class<?> clazz) {
+    private List<String> findMissingOnClass(ClassLoader classLoader, Class<?> clazz) {
         Activate activate = clazz.getAnnotation(Activate.class);
 
         if (activate == null) {
-            return true;
+            return Collections.emptyList();
         }
         String[] onClass = null;
 
@@ -1322,14 +1400,20 @@ public class ExtensionLoader<T> {
             onClass = Dubbo2ActivateUtils.getOnClass(activate);
         }
 
-        boolean isActive = true;
-
-        if (null != onClass && onClass.length > 0) {
-            isActive = Arrays.stream(onClass)
-                    .filter(StringUtils::isNotBlank)
-                    .allMatch(className -> ClassUtils.isPresent(className, classLoader));
+        if (null == onClass || onClass.length == 0) {
+            return Collections.emptyList();
         }
-        return isActive;
+        return Arrays.stream(onClass)
+                .filter(StringUtils::isNotBlank)
+                .filter(className -> !ClassUtils.isPresent(className, classLoader))
+                .collect(Collectors.toList());
+    }
+
+    private static List<String> formatClassNames(Collection<Class<?>> classes) {
+        if (classes == null || classes.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return classes.stream().map(Class::getName).collect(Collectors.toList());
     }
 
     /**
