@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ALIVE_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.APPLICATION_KEY;
+import static org.apache.dubbo.common.constants.CommonConstants.BACKUP_TAG_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.CLUSTER_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.CORE_THREADS_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.DEFAULT_KEY_PREFIX;
@@ -175,5 +176,44 @@ class DefaultProviderURLMergeProcessorTest {
         Assertions.assertEquals(localURL.getParameter(CLUSTER_KEY), mergedUrl.getParameter(CLUSTER_KEY));
         Assertions.assertEquals(localURL.getParameter(TIMEOUT_KEY), mergedUrl.getParameter(TIMEOUT_KEY));
         Assertions.assertEquals(localURL.getParameter(LOADBALANCE_KEY), mergedUrl.getParameter(LOADBALANCE_KEY));
+    }
+
+    @Test
+    void testBackupTagPreservedFromProvider() {
+        // Provider sets dubbo.backup.tag=B and consumer sets dubbo.backup.tag=C -> merged URL keeps provider's B.
+        URL providerURL = new URLBuilder(DUBBO_PROTOCOL, "localhost", 20880)
+                .setPath("DemoService")
+                .addParameter(BACKUP_TAG_KEY, "B")
+                .build();
+        URL consumerURL = new URLBuilder(DUBBO_PROTOCOL, "localhost", 20880)
+                .setPath("DemoService")
+                .addParameter(BACKUP_TAG_KEY, "C")
+                .build();
+
+        URL mergedUrl = providerURLMergeProcessor.mergeUrl(providerURL, consumerURL.getParameters());
+        Assertions.assertEquals("B", mergedUrl.getParameter(BACKUP_TAG_KEY));
+    }
+
+    @Test
+    void testBackupTagDoesNotLeakFromConsumer() {
+        // Provider omits dubbo.backup.tag and consumer sets dubbo.backup.tag=C -> merged URL has null (no leak).
+        URL providerURL = new URLBuilder(DUBBO_PROTOCOL, "localhost", 20880)
+                .setPath("DemoService")
+                .addParameter(APPLICATION_KEY, "provider")
+                .build();
+        URL consumerURL = new URLBuilder(DUBBO_PROTOCOL, "localhost", 20880)
+                .setPath("DemoService")
+                .addParameter(BACKUP_TAG_KEY, "C")
+                .build();
+
+        URL mergedUrl = providerURLMergeProcessor.mergeUrl(providerURL, consumerURL.getParameters());
+        Assertions.assertNull(mergedUrl.getParameter(BACKUP_TAG_KEY));
+        Assertions.assertFalse(mergedUrl.hasParameter(BACKUP_TAG_KEY));
+
+        // Also verify when provider URL has no parameters at all.
+        URL emptyProviderURL = URL.valueOf("dubbo://localhost:20880/DemoService");
+        URL mergedEmptyUrl = providerURLMergeProcessor.mergeUrl(emptyProviderURL, consumerURL.getParameters());
+        Assertions.assertNull(mergedEmptyUrl.getParameter(BACKUP_TAG_KEY));
+        Assertions.assertFalse(mergedEmptyUrl.hasParameter(BACKUP_TAG_KEY));
     }
 }
