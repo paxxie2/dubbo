@@ -537,6 +537,62 @@ class TagStateRouterTest {
         Assertions.assertEquals(Collections.singletonList(untagged), new ArrayList<>(forceFalseFallbackResult));
     }
 
+    @Test
+    void testConsumerBackupTagDynamicRuleForcePreserved() {
+        Invoker<String> serviceANormal = new MockInvoker<>(
+                URL.valueOf("test://10.20.3.1:7772/DemoInterface?application=foo&dubbo.tag=A")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged = new MockInvoker<>(
+                URL.valueOf("test://10.20.3.3:7775/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        BitList<Invoker<String>> invokers = new BitList<>(Arrays.asList(serviceANormal, untagged));
+
+        // Primary tag X has no rule and no provider; consumer backup tag B has a dynamic rule whose address is offline.
+        // No dubbo.force.tag attachment is set.
+        RpcInvocation invocationWithBackupAttachment = new RpcInvocation();
+        invocationWithBackupAttachment.setAttachment(TAG_KEY, "X");
+        invocationWithBackupAttachment.setAttachment(BACKUP_TAG_KEY, "B");
+
+        URL consumerUrlWithBackup = URL.valueOf("consumer://127.0.0.1/DemoInterface?dubbo.backup.tag=B")
+                .setScopeModel(moduleModel);
+        RpcInvocation invocationWithUrlBackup = new RpcInvocation();
+        invocationWithUrlBackup.setAttachment(TAG_KEY, "X");
+
+        // Dynamic rule with force=true -> must NOT fall back to untagged provider
+        TagStateRouter<String> forceTrueRouter =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        TagRouterRule forceTrueRule = buildDynamicTagRule(true);
+        Mockito.when(forceTrueRouter.getInvokers()).thenReturn(invokers);
+        forceTrueRule.init(forceTrueRouter);
+        forceTrueRouter.setTagRouterRule(forceTrueRule);
+
+        List<Invoker<String>> forceTrueAttachmentResult =
+                forceTrueRouter.route(invokers.clone(), url, invocationWithBackupAttachment, false, new Holder<>());
+        Assertions.assertEquals(Collections.emptyList(), new ArrayList<>(forceTrueAttachmentResult));
+
+        List<Invoker<String>> forceTrueUrlResult = forceTrueRouter.route(
+                invokers.clone(), consumerUrlWithBackup, invocationWithUrlBackup, false, new Holder<>());
+        Assertions.assertEquals(Collections.emptyList(), new ArrayList<>(forceTrueUrlResult));
+
+        // Dynamic rule with force=false -> falls back to online untagged provider
+        TagStateRouter<String> forceFalseRouter =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        TagRouterRule forceFalseRule = buildDynamicTagRule(false);
+        Mockito.when(forceFalseRouter.getInvokers()).thenReturn(invokers);
+        forceFalseRule.init(forceFalseRouter);
+        forceFalseRouter.setTagRouterRule(forceFalseRule);
+
+        List<Invoker<String>> forceFalseAttachmentResult =
+                forceFalseRouter.route(invokers.clone(), url, invocationWithBackupAttachment, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(untagged), new ArrayList<>(forceFalseAttachmentResult));
+
+        List<Invoker<String>> forceFalseUrlResult = forceFalseRouter.route(
+                invokers.clone(), consumerUrlWithBackup, invocationWithUrlBackup, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(untagged), new ArrayList<>(forceFalseUrlResult));
+    }
+
     private TagRouterRule buildDynamicTagRule(boolean force) {
         String tagRouterRuleConfig = "---\n"
                 + "force: " + force + "\n"

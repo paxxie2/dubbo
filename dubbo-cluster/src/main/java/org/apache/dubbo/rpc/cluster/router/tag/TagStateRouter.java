@@ -148,8 +148,16 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             }
 
             // Tier 2 (Backup): try provider-side backup tag match, then consumer-side backup tag
+            Holder<Boolean> backupMatchedDynamicRule = new Holder<>();
             result = filterUsingBackupTag(
-                    invokers, url, invocation, tag, tagnameToAddresses, needToPrintMessage, messageHolder);
+                    invokers,
+                    url,
+                    invocation,
+                    tag,
+                    tagnameToAddresses,
+                    backupMatchedDynamicRule,
+                    needToPrintMessage,
+                    messageHolder);
             if (CollectionUtils.isNotEmpty(result)) {
                 return result;
             }
@@ -157,7 +165,9 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             // Tier 3 (Force & untagged failover): only when both Tier 1 and Tier 2 are empty.
             // force.tag is set by default to false, which means it will invoke any providers without a tag
             // unless it's explicitly disallowed.
-            if ((addresses != null && tagRouterRuleCopy.isForce()) || isForceUseTag(invocation)) {
+            if (((addresses != null || Boolean.TRUE.equals(backupMatchedDynamicRule.get()))
+                            && tagRouterRuleCopy.isForce())
+                    || isForceUseTag(invocation)) {
                 if (needToPrintMessage) {
                     messageHolder.set("Use tag " + tag + " to route. Reason: result is empty and force is true");
                 }
@@ -235,7 +245,8 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 return result;
             }
             // Tier 2 (Backup)
-            result = filterUsingBackupTag(invokers, url, invocation, tag, null, needToPrintMessage, messageHolder);
+            result =
+                    filterUsingBackupTag(invokers, url, invocation, tag, null, null, needToPrintMessage, messageHolder);
             if (CollectionUtils.isNotEmpty(result)) {
                 return result;
             }
@@ -258,6 +269,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             Invocation invocation,
             String tag,
             Map<String, Set<String>> tagnameToAddresses,
+            Holder<Boolean> backupMatchedDynamicRule,
             boolean needToPrintMessage,
             Holder<String> messageHolder) {
         // 1. Provider-side backup match
@@ -285,6 +297,9 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 Set<String> backupAddresses =
                         selectAddressByTagLevel(tagnameToAddresses, backupTag, isForceUseTag(invocation));
                 if (backupAddresses != null) {
+                    if (backupMatchedDynamicRule != null) {
+                        backupMatchedDynamicRule.set(true);
+                    }
                     result = filterInvoker(invokers, invoker -> addressMatches(invoker.getUrl(), backupAddresses));
                 } else {
                     result = filterInvoker(
