@@ -22,6 +22,8 @@ import org.apache.dubbo.common.utils.SystemPropertyConfigUtils;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
@@ -235,6 +237,21 @@ class AbstractInterfaceConfigTest {
         InterfaceConfig interfaceConfig = new InterfaceConfig();
         interfaceConfig.setScope("scope");
         Assertions.assertEquals("scope", interfaceConfig.getScope());
+    }
+
+    @Test
+    void testBackupTag() {
+        InterfaceConfig interfaceConfig = new InterfaceConfig();
+        Assertions.assertNull(interfaceConfig.getBackupTag());
+        Map<String, String> unsetParameters = new HashMap<>();
+        AbstractConfig.appendParameters(unsetParameters, interfaceConfig);
+        Assertions.assertFalse(unsetParameters.containsKey(CommonConstants.BACKUP_TAG_KEY));
+
+        interfaceConfig.setBackupTag("backup-gray");
+        Assertions.assertEquals("backup-gray", interfaceConfig.getBackupTag());
+        Map<String, String> setParameters = new HashMap<>();
+        AbstractConfig.appendParameters(setParameters, interfaceConfig);
+        Assertions.assertEquals("backup-gray", setParameters.get(CommonConstants.BACKUP_TAG_KEY));
     }
 
     @Test

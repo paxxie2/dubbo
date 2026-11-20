@@ -349,6 +349,8 @@ public interface CommonConstants {
 
     String TAG_KEY = "dubbo.tag";
 
+    String BACKUP_TAG_KEY = "dubbo.backup.tag";
+
     /**
      * To decide whether to make connection when the client is created
      */
