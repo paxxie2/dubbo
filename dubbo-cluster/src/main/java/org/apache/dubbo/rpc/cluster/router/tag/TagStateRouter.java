@@ -42,6 +42,7 @@ import java.util.function.Predicate;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ANYHOST_VALUE;
 import static org.apache.dubbo.common.constants.CommonConstants.ANY_VALUE;
+import static org.apache.dubbo.common.constants.CommonConstants.BACKUP_TAG_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.TAG_KEY;
 import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_TAG_ROUTE_EMPTY;
 import static org.apache.dubbo.common.constants.LoggerCodeConstants.CLUSTER_TAG_ROUTE_INVALID;
@@ -122,7 +123,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             if (needToPrintMessage) {
                 messageHolder.set("Disable Tag Router. Reason: tagRouterRule is invalid or disabled");
             }
-            return filterUsingStaticTag(invokers, url, invocation);
+            return filterUsingStaticTag(invokers, url, invocation, needToPrintMessage, messageHolder);
         }
 
         BitList<Invoker<T>> result = invokers;
@@ -131,31 +132,46 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
         if (StringUtils.isNotEmpty(tag)) {
             Map<String, Set<String>> tagnameToAddresses = tagRouterRuleCopy.getTagnameToAddresses();
             Set<String> addresses = selectAddressByTagLevel(tagnameToAddresses, tag, isForceUseTag(invocation));
-            // filter by dynamic tag group first
+            // Tier 1 (Primary): filter by dynamic tag group first, otherwise check static tag
             if (addresses != null) { // null means tag not set
                 result = filterInvoker(invokers, invoker -> addressMatches(invoker.getUrl(), addresses));
-                // if result is not null OR it's null but force=true, return result directly
-                if (CollectionUtils.isNotEmpty(result) || tagRouterRuleCopy.isForce()) {
-                    if (needToPrintMessage) {
-                        messageHolder.set(
-                                "Use tag " + tag + " to route. Reason: result is not null OR it's null but force=true");
-                    }
-                    return result;
-                }
             } else {
-                // dynamic tag group doesn't have any item about the requested app OR it's null after filtered by
-                // dynamic tag group but force=false. check static tag
+                // dynamic tag group doesn't have any item about the requested app. check static tag
                 result = filterInvoker(
                         invokers, invoker -> tag.equals(invoker.getUrl().getParameter(TAG_KEY)));
             }
-            // If there's no tagged providers that can match the current tagged request. force.tag is set by default
-            // to false, which means it will invoke any providers without a tag unless it's explicitly disallowed.
-            if (CollectionUtils.isNotEmpty(result) || isForceUseTag(invocation)) {
+            if (CollectionUtils.isNotEmpty(result)) {
                 if (needToPrintMessage) {
-                    messageHolder.set("Use tag " + tag
-                            + " to route. Reason: result is not empty or ForceUseTag key is true in invocation");
+                    messageHolder.set("Use tag " + tag + " to route. Reason: result is not empty");
                 }
                 return result;
+            }
+
+            // Tier 2 (Backup): try provider-side backup tag match, then consumer-side backup tag
+            Holder<Boolean> backupMatchedDynamicRule = new Holder<>();
+            result = filterUsingBackupTag(
+                    invokers,
+                    url,
+                    invocation,
+                    tag,
+                    tagnameToAddresses,
+                    backupMatchedDynamicRule,
+                    needToPrintMessage,
+                    messageHolder);
+            if (CollectionUtils.isNotEmpty(result)) {
+                return result;
+            }
+
+            // Tier 3 (Force & untagged failover): only when both Tier 1 and Tier 2 are empty.
+            // force.tag is set by default to false, which means it will invoke any providers without a tag
+            // unless it's explicitly disallowed.
+            if (((addresses != null || Boolean.TRUE.equals(backupMatchedDynamicRule.get()))
+                            && tagRouterRuleCopy.isForce())
+                    || isForceUseTag(invocation)) {
+                if (needToPrintMessage) {
+                    messageHolder.set("Use tag " + tag + " to route. Reason: result is empty and force is true");
+                }
+                return BitList.emptyList();
             }
             // FAILOVER: return all Providers without any tags.
             else {
@@ -207,7 +223,12 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
      * @param <T>
      * @return
      */
-    private <T> BitList<Invoker<T>> filterUsingStaticTag(BitList<Invoker<T>> invokers, URL url, Invocation invocation) {
+    private <T> BitList<Invoker<T>> filterUsingStaticTag(
+            BitList<Invoker<T>> invokers,
+            URL url,
+            Invocation invocation,
+            boolean needToPrintMessage,
+            Holder<String> messageHolder) {
         BitList<Invoker<T>> result;
         // Dynamic param
         String tag = StringUtils.isEmpty(invocation.getAttachment(TAG_KEY))
@@ -215,20 +236,94 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 : invocation.getAttachment(TAG_KEY);
         // Tag request
         if (!StringUtils.isEmpty(tag)) {
+            // Tier 1 (Primary)
             result = filterInvoker(
                     invokers,
                     invoker ->
                             ANY_VALUE.equals(tag) || tag.equals(invoker.getUrl().getParameter(TAG_KEY)));
-            if (CollectionUtils.isEmpty(result) && !isForceUseTag(invocation)) {
-                result = filterInvoker(
-                        invokers,
-                        invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
+            if (CollectionUtils.isNotEmpty(result)) {
+                return result;
             }
+            // Tier 2 (Backup)
+            result =
+                    filterUsingBackupTag(invokers, url, invocation, tag, null, null, needToPrintMessage, messageHolder);
+            if (CollectionUtils.isNotEmpty(result)) {
+                return result;
+            }
+            // Tier 3 (Force & untagged failover)
+            if (isForceUseTag(invocation)) {
+                return BitList.emptyList();
+            }
+            result = filterInvoker(
+                    invokers, invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
         } else {
             result = filterInvoker(
                     invokers, invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
         }
         return result;
+    }
+
+    private <T> BitList<Invoker<T>> filterUsingBackupTag(
+            BitList<Invoker<T>> invokers,
+            URL url,
+            Invocation invocation,
+            String tag,
+            Map<String, Set<String>> tagnameToAddresses,
+            Holder<Boolean> backupMatchedDynamicRule,
+            boolean needToPrintMessage,
+            Holder<String> messageHolder) {
+        // 1. Provider-side backup match
+        BitList<Invoker<T>> result =
+                filterInvoker(invokers, invoker -> tag.equals(invoker.getUrl().getParameter(BACKUP_TAG_KEY)));
+        if (CollectionUtils.isNotEmpty(result)) {
+            if (needToPrintMessage) {
+                messageHolder.set("Use provider backup tag " + tag + " to route. Reason: primary tag result is empty");
+            }
+            return result;
+        }
+
+        // 2. Consumer-side backup tag match
+        String backupTag = StringUtils.isEmpty(invocation.getAttachment(BACKUP_TAG_KEY))
+                ? url.getParameter(BACKUP_TAG_KEY)
+                : invocation.getAttachment(BACKUP_TAG_KEY);
+        if (StringUtils.isNotEmpty(backupTag)) {
+            if (tagnameToAddresses != null) {
+                Set<String> backupAddresses =
+                        selectAddressByTagLevel(tagnameToAddresses, backupTag, isForceUseTag(invocation));
+                if (backupAddresses != null) {
+                    if (backupMatchedDynamicRule != null) {
+                        backupMatchedDynamicRule.set(true);
+                    }
+                    result = filterInvoker(invokers, invoker -> addressMatches(invoker.getUrl(), backupAddresses));
+                } else {
+                    result = filterInvoker(
+                            invokers,
+                            invoker -> backupTag.equals(invoker.getUrl().getParameter(TAG_KEY))
+                                    || backupTag.equals(invoker.getUrl().getParameter(BACKUP_TAG_KEY)));
+                }
+            } else {
+                if (ANY_VALUE.equals(backupTag)) {
+                    if (needToPrintMessage) {
+                        messageHolder.set(
+                                "Use consumer wildcard backup tag to route. Reason: primary tag result is empty");
+                    }
+                    return invokers;
+                }
+                result = filterInvoker(
+                        invokers,
+                        invoker -> backupTag.equals(invoker.getUrl().getParameter(TAG_KEY))
+                                || backupTag.equals(invoker.getUrl().getParameter(BACKUP_TAG_KEY)));
+            }
+            if (CollectionUtils.isNotEmpty(result)) {
+                if (needToPrintMessage) {
+                    messageHolder.set(
+                            "Use consumer backup tag " + backupTag + " to route. Reason: primary tag result is empty");
+                }
+                return result;
+            }
+        }
+
+        return BitList.emptyList();
     }
 
     @Override

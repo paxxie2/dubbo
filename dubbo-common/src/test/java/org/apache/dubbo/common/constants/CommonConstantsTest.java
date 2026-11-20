@@ -18,6 +18,7 @@ package org.apache.dubbo.common.constants;
 
 import org.junit.jupiter.api.Test;
 
+import static org.apache.dubbo.common.constants.CommonConstants.BACKUP_TAG_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.COMMA_SEPARATOR_CHAR;
 import static org.apache.dubbo.common.constants.CommonConstants.COMPOSITE_METADATA_STORAGE_TYPE;
 import static org.apache.dubbo.common.constants.CommonConstants.DEFAULT_SERVICE_NAME_MAPPING_PROPERTIES_PATH;
@@ -37,5 +38,6 @@ class CommonConstantsTest {
         assertEquals("composite", COMPOSITE_METADATA_STORAGE_TYPE);
         assertEquals("service-name-mapping.properties-path", SERVICE_NAME_MAPPING_PROPERTIES_FILE_KEY);
         assertEquals("META-INF/dubbo/service-name-mapping.properties", DEFAULT_SERVICE_NAME_MAPPING_PROPERTIES_PATH);
+        assertEquals("dubbo.backup.tag", BACKUP_TAG_KEY);
     }
 }
