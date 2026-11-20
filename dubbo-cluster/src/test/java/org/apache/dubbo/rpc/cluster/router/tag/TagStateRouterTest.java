@@ -26,10 +26,13 @@ import org.apache.dubbo.rpc.cluster.router.state.BitList;
 import org.apache.dubbo.rpc.cluster.router.state.StateRouter;
 import org.apache.dubbo.rpc.cluster.router.tag.model.TagRouterRule;
 import org.apache.dubbo.rpc.cluster.router.tag.model.TagRuleParser;
+import org.apache.dubbo.rpc.cluster.support.merger.DefaultProviderURLMergeProcessor;
 import org.apache.dubbo.rpc.model.ApplicationModel;
 import org.apache.dubbo.rpc.model.ModuleModel;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,7 +45,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import static org.apache.dubbo.common.constants.CommonConstants.ANY_VALUE;
+import static org.apache.dubbo.common.constants.CommonConstants.BACKUP_TAG_KEY;
 import static org.apache.dubbo.common.constants.CommonConstants.TAG_KEY;
+import static org.apache.dubbo.rpc.Constants.FORCE_USE_TAG;
 import static org.mockito.Mockito.when;
 
 class TagStateRouterTest {
@@ -371,5 +376,242 @@ class TagStateRouterTest {
         Assertions.assertEquals(invoker1, filteredInvokers.get(0));
         Assertions.assertEquals(invoker2, filteredInvokers.get(1));
         Assertions.assertEquals(invoker3, filteredInvokers.get(2));
+    }
+
+    @Test
+    void testBackupTagFailoverAndRecovery() {
+        StateRouter<String> router = new TagStateRouterFactory().getRouter(String.class, url);
+
+        Invoker<String> serviceB = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7771/DemoInterface?dubbo.tag=B").setScopeModel(moduleModel), true);
+        Invoker<String> serviceANormal = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7772/DemoInterface?dubbo.tag=A").setScopeModel(moduleModel), true);
+        Invoker<String> serviceABackup1 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7773/DemoInterface?dubbo.tag=A&dubbo.backup.tag=B")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> serviceABackup2 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7774/DemoInterface?dubbo.tag=A&dubbo.backup.tag=B")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7775/DemoInterface").setScopeModel(moduleModel), true);
+
+        BitList<Invoker<String>> allOnline =
+                new BitList<>(Arrays.asList(serviceB, serviceANormal, serviceABackup1, serviceABackup2, untagged));
+
+        // 1. All online: request dubbo.tag=B -> selects ONLY Service B (backup NOT used)
+        RpcInvocation tagBInvocation = new RpcInvocation();
+        tagBInvocation.setAttachment(TAG_KEY, "B");
+        List<Invoker<String>> routedAllOnline =
+                router.route(allOnline.clone(), url, tagBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(serviceB), new ArrayList<>(routedAllOnline));
+
+        // 2. Service B offline: request dubbo.tag=B -> selects ONLY Service A backup machines
+        BitList<Invoker<String>> serviceBOffline =
+                new BitList<>(Arrays.asList(serviceANormal, serviceABackup1, serviceABackup2, untagged));
+        List<Invoker<String>> routedBackup =
+                router.route(serviceBOffline.clone(), url, tagBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Arrays.asList(serviceABackup1, serviceABackup2), new ArrayList<>(routedBackup));
+
+        // 3. Service B recovers: request dubbo.tag=B -> switches strictly back to Service B
+        BitList<Invoker<String>> serviceBRecovered =
+                new BitList<>(Arrays.asList(serviceB, serviceANormal, serviceABackup1, serviceABackup2, untagged));
+        List<Invoker<String>> routedRecovered =
+                router.route(serviceBRecovered.clone(), url, tagBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(serviceB), new ArrayList<>(routedRecovered));
+
+        // 4. Service A traffic still routes to all Service A machines (including backup ones)
+        RpcInvocation tagAInvocation = new RpcInvocation();
+        tagAInvocation.setAttachment(TAG_KEY, "A");
+        List<Invoker<String>> routedTagA = router.route(allOnline.clone(), url, tagAInvocation, false, new Holder<>());
+        Assertions.assertEquals(
+                Arrays.asList(serviceANormal, serviceABackup1, serviceABackup2), new ArrayList<>(routedTagA));
+
+        // 5. Untagged request routes to untagged providers even if they carry dubbo.backup.tag=B
+        Invoker<String> untaggedWithBackup = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7776/DemoInterface?dubbo.backup.tag=B")
+                        .setScopeModel(moduleModel),
+                true);
+        BitList<Invoker<String>> withUntaggedBackup = new BitList<>(Arrays.asList(
+                serviceB, serviceANormal, serviceABackup1, serviceABackup2, untagged, untaggedWithBackup));
+        RpcInvocation untaggedInvocation = new RpcInvocation();
+        List<Invoker<String>> routedUntagged =
+                router.route(withUntaggedBackup.clone(), url, untaggedInvocation, false, new Holder<>());
+        Assertions.assertEquals(Arrays.asList(untagged, untaggedWithBackup), new ArrayList<>(routedUntagged));
+    }
+
+    @Test
+    void testBackupTagWithForceSemantics() {
+        StateRouter<String> router = new TagStateRouterFactory().getRouter(String.class, url);
+
+        Invoker<String> serviceANormal = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7772/DemoInterface?dubbo.tag=A").setScopeModel(moduleModel), true);
+        Invoker<String> serviceABackup = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7773/DemoInterface?dubbo.tag=A&dubbo.backup.tag=B")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7775/DemoInterface").setScopeModel(moduleModel), true);
+
+        // force=true, primary offline, backup online -> routes strictly to backup
+        BitList<Invoker<String>> primaryOfflineWithBackup =
+                new BitList<>(Arrays.asList(serviceANormal, serviceABackup, untagged));
+        RpcInvocation forceInvocation = new RpcInvocation();
+        forceInvocation.setAttachment(TAG_KEY, "B");
+        forceInvocation.setAttachment(FORCE_USE_TAG, "true");
+        List<Invoker<String>> forceWithBackupResult =
+                router.route(primaryOfflineWithBackup.clone(), url, forceInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(serviceABackup), new ArrayList<>(forceWithBackupResult));
+
+        // force=true, BOTH primary and backup offline -> returns empty list (no leak to untagged)
+        BitList<Invoker<String>> primaryAndBackupOffline = new BitList<>(Arrays.asList(serviceANormal, untagged));
+        List<Invoker<String>> forceWithoutBackupResult =
+                router.route(primaryAndBackupOffline.clone(), url, forceInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.emptyList(), new ArrayList<>(forceWithoutBackupResult));
+
+        // force=false, BOTH primary and backup offline -> falls back to untagged providers
+        RpcInvocation nonForceInvocation = new RpcInvocation();
+        nonForceInvocation.setAttachment(TAG_KEY, "B");
+        nonForceInvocation.setAttachment(FORCE_USE_TAG, "false");
+        List<Invoker<String>> nonForceResult =
+                router.route(primaryAndBackupOffline.clone(), url, nonForceInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(untagged), new ArrayList<>(nonForceResult));
+    }
+
+    @Test
+    void testBackupTagWithDynamicRuleForceTrueAndFalse() {
+        Invoker<String> serviceANormal = new MockInvoker<>(
+                URL.valueOf("test://10.20.3.1:7772/DemoInterface?application=foo&dubbo.tag=A")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> serviceABackup = new MockInvoker<>(
+                URL.valueOf("test://10.20.3.2:7773/DemoInterface?application=foo&dubbo.tag=A&dubbo.backup.tag=B")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged = new MockInvoker<>(
+                URL.valueOf("test://10.20.3.3:7775/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+
+        BitList<Invoker<String>> withBackup = new BitList<>(Arrays.asList(serviceANormal, serviceABackup, untagged));
+        BitList<Invoker<String>> withoutBackup = new BitList<>(Arrays.asList(serviceANormal, untagged));
+
+        RpcInvocation tagBInvocation = new RpcInvocation();
+        tagBInvocation.setAttachment(TAG_KEY, "B");
+
+        // Dynamic rule with force=true where tag B's dynamic address is offline
+        TagStateRouter<String> forceTrueRouter =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        TagRouterRule forceTrueRule = buildDynamicTagRule(true);
+        Mockito.when(forceTrueRouter.getInvokers()).thenReturn(withBackup);
+        forceTrueRule.init(forceTrueRouter);
+        forceTrueRouter.setTagRouterRule(forceTrueRule);
+
+        // Primary dynamic tag B offline, backup present -> routes strictly to backup
+        List<Invoker<String>> forceTrueBackupResult =
+                forceTrueRouter.route(withBackup.clone(), url, tagBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(serviceABackup), new ArrayList<>(forceTrueBackupResult));
+
+        // Primary dynamic tag B offline, backup absent, force=true -> empty list
+        List<Invoker<String>> forceTrueEmptyResult =
+                forceTrueRouter.route(withoutBackup.clone(), url, tagBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.emptyList(), new ArrayList<>(forceTrueEmptyResult));
+
+        // Dynamic rule with force=false where tag B's dynamic address is offline
+        TagStateRouter<String> forceFalseRouter =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        TagRouterRule forceFalseRule = buildDynamicTagRule(false);
+        Mockito.when(forceFalseRouter.getInvokers()).thenReturn(withBackup);
+        forceFalseRule.init(forceFalseRouter);
+        forceFalseRouter.setTagRouterRule(forceFalseRule);
+
+        // Primary dynamic tag B offline, backup present -> routes strictly to backup
+        List<Invoker<String>> forceFalseBackupResult =
+                forceFalseRouter.route(withBackup.clone(), url, tagBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(serviceABackup), new ArrayList<>(forceFalseBackupResult));
+
+        // Primary dynamic tag B offline, backup absent, force=false -> falls back to untagged
+        List<Invoker<String>> forceFalseFallbackResult =
+                forceFalseRouter.route(withoutBackup.clone(), url, tagBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(untagged), new ArrayList<>(forceFalseFallbackResult));
+    }
+
+    private TagRouterRule buildDynamicTagRule(boolean force) {
+        String tagRouterRuleConfig = "---\n"
+                + "force: " + force + "\n"
+                + "runtime: true\n"
+                + "enabled: true\n"
+                + "priority: 1\n"
+                + "key: foo\n"
+                + "tags:\n"
+                + "  - name: B\n"
+                + "    addresses: [\"10.20.3.99:20880\"]\n"
+                + "  - name: A\n"
+                + "    addresses: [\"10.20.3.1:7772\"]\n"
+                + "...";
+        return TagRuleParser.parse(tagRouterRuleConfig);
+    }
+
+    @Test
+    void testBackupTagRoutingWithMergedProviderUrls() {
+        DefaultProviderURLMergeProcessor mergeProcessor = new DefaultProviderURLMergeProcessor();
+
+        URL consumerUrl = URL.valueOf("consumer://127.0.0.1/DemoInterface?dubbo.backup.tag=C")
+                .setScopeModel(moduleModel);
+        Map<String, String> consumerParams = consumerUrl.getParameters();
+
+        URL mergedUrl1 = mergeProcessor
+                .mergeUrl(
+                        URL.valueOf("test://127.0.0.1:7781/DemoInterface?dubbo.tag=A&dubbo.backup.tag=B"),
+                        consumerParams)
+                .setScopeModel(moduleModel);
+        URL mergedUrl2 = mergeProcessor
+                .mergeUrl(URL.valueOf("test://127.0.0.1:7782/DemoInterface?dubbo.tag=A"), consumerParams)
+                .setScopeModel(moduleModel);
+        URL mergedUrl3 = mergeProcessor
+                .mergeUrl(URL.valueOf("test://127.0.0.1:7783/DemoInterface?dubbo.tag=C"), consumerParams)
+                .setScopeModel(moduleModel);
+        URL mergedUrl4 = mergeProcessor
+                .mergeUrl(URL.valueOf("test://127.0.0.1:7784/DemoInterface?dubbo.tag=D"), consumerParams)
+                .setScopeModel(moduleModel);
+
+        // Verify merge processor preserves provider backup tag and does NOT leak consumer backup tag
+        Assertions.assertEquals("B", mergedUrl1.getParameter(BACKUP_TAG_KEY));
+        Assertions.assertNull(mergedUrl2.getParameter(BACKUP_TAG_KEY));
+        Assertions.assertNull(mergedUrl3.getParameter(BACKUP_TAG_KEY));
+        Assertions.assertNull(mergedUrl4.getParameter(BACKUP_TAG_KEY));
+
+        Invoker<String> invoker1 = new MockInvoker<>(mergedUrl1, true);
+        Invoker<String> invoker2 = new MockInvoker<>(mergedUrl2, true);
+        Invoker<String> invoker3 = new MockInvoker<>(mergedUrl3, true);
+        Invoker<String> invoker4 = new MockInvoker<>(mergedUrl4, true);
+        BitList<Invoker<String>> invokers = new BitList<>(Arrays.asList(invoker1, invoker2, invoker3, invoker4));
+
+        StateRouter<String> router = new TagStateRouterFactory().getRouter(String.class, consumerUrl);
+
+        // 1. Request for primary tag B selects ONLY Invoker 1 (and NOT Invoker 2)
+        RpcInvocation primaryBInvocation = new RpcInvocation();
+        primaryBInvocation.setAttachment(TAG_KEY, "B");
+        List<Invoker<String>> routedB =
+                router.route(invokers.clone(), consumerUrl, primaryBInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(invoker1), new ArrayList<>(routedB));
+
+        // 2. Request for missing primary tag X with consumer URL dubbo.backup.tag=C selects ONLY Invoker 3
+        // (and NOT Invoker 2, proving consumer C did not leak into Invoker 2)
+        RpcInvocation missingXInvocation = new RpcInvocation();
+        missingXInvocation.setAttachment(TAG_KEY, "X");
+        List<Invoker<String>> routedConsumerBackup =
+                router.route(invokers.clone(), consumerUrl, missingXInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(invoker3), new ArrayList<>(routedConsumerBackup));
+
+        // 3. Request for missing primary tag X with consumer URL dubbo.backup.tag=C AND invocation attachment
+        // dubbo.backup.tag=D selects ONLY Invoker 4 (proving attachment precedence over consumer URL)
+        RpcInvocation attachmentOverrideInvocation = new RpcInvocation();
+        attachmentOverrideInvocation.setAttachment(TAG_KEY, "X");
+        attachmentOverrideInvocation.setAttachment(BACKUP_TAG_KEY, "D");
+        List<Invoker<String>> routedAttachmentBackup =
+                router.route(invokers.clone(), consumerUrl, attachmentOverrideInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(invoker4), new ArrayList<>(routedAttachmentBackup));
     }
 }
