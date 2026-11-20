@@ -593,6 +593,63 @@ class TagStateRouterTest {
         Assertions.assertEquals(Collections.singletonList(untagged), new ArrayList<>(forceFalseUrlResult));
     }
 
+    @Test
+    void testWildcardConsumerBackupTagRespectsDynamicRule() {
+        Invoker<String> unrelatedTagged = new MockInvoker<>(
+                URL.valueOf("test://10.20.3.4:7774/DemoInterface?application=foo&dubbo.tag=other")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged = new MockInvoker<>(
+                URL.valueOf("test://10.20.3.3:7775/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        BitList<Invoker<String>> invokers = new BitList<>(Arrays.asList(unrelatedTagged, untagged));
+
+        // Primary tag B is mapped to an offline address by the dynamic rule; consumer specifies dubbo.backup.tag=*
+        RpcInvocation wildcardAttachmentInvocation = new RpcInvocation();
+        wildcardAttachmentInvocation.setAttachment(TAG_KEY, "B");
+        wildcardAttachmentInvocation.setAttachment(BACKUP_TAG_KEY, ANY_VALUE);
+
+        URL consumerUrlWithWildcardBackup = URL.valueOf("consumer://127.0.0.1/DemoInterface?dubbo.backup.tag=*")
+                .setScopeModel(moduleModel);
+        RpcInvocation wildcardUrlInvocation = new RpcInvocation();
+        wildcardUrlInvocation.setAttachment(TAG_KEY, "B");
+
+        // Forced dynamic rule -> must return EMPTY (must NOT leak to unrelated tagged or untagged providers)
+        TagStateRouter<String> forceTrueRouter =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        TagRouterRule forceTrueRule = buildDynamicTagRule(true);
+        Mockito.when(forceTrueRouter.getInvokers()).thenReturn(invokers);
+        forceTrueRule.init(forceTrueRouter);
+        forceTrueRouter.setTagRouterRule(forceTrueRule);
+
+        List<Invoker<String>> forceTrueAttachmentResult =
+                forceTrueRouter.route(invokers.clone(), url, wildcardAttachmentInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.emptyList(), new ArrayList<>(forceTrueAttachmentResult));
+
+        List<Invoker<String>> forceTrueUrlResult = forceTrueRouter.route(
+                invokers.clone(), consumerUrlWithWildcardBackup, wildcardUrlInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.emptyList(), new ArrayList<>(forceTrueUrlResult));
+
+        // Non-forced dynamic rule -> falls back only to untagged provider (must NOT leak to unrelated tagged provider)
+        TagStateRouter<String> forceFalseRouter =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        TagRouterRule forceFalseRule = buildDynamicTagRule(false);
+        Mockito.when(forceFalseRouter.getInvokers()).thenReturn(invokers);
+        forceFalseRule.init(forceFalseRouter);
+        forceFalseRouter.setTagRouterRule(forceFalseRule);
+
+        List<Invoker<String>> forceFalseResult =
+                forceFalseRouter.route(invokers.clone(), url, wildcardAttachmentInvocation, false, new Holder<>());
+        Assertions.assertEquals(Collections.singletonList(untagged), new ArrayList<>(forceFalseResult));
+
+        // Static mode (no dynamic rule) -> wildcard backup matches all invokers like static primary wildcard
+        StateRouter<String> staticRouter = new TagStateRouterFactory().getRouter(String.class, url);
+        List<Invoker<String>> staticResult =
+                staticRouter.route(invokers.clone(), url, wildcardAttachmentInvocation, false, new Holder<>());
+        Assertions.assertEquals(Arrays.asList(unrelatedTagged, untagged), new ArrayList<>(staticResult));
+    }
+
     private TagRouterRule buildDynamicTagRule(boolean force) {
         String tagRouterRuleConfig = "---\n"
                 + "force: " + force + "\n"

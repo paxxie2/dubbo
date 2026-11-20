@@ -287,12 +287,6 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 ? url.getParameter(BACKUP_TAG_KEY)
                 : invocation.getAttachment(BACKUP_TAG_KEY);
         if (StringUtils.isNotEmpty(backupTag)) {
-            if (ANY_VALUE.equals(backupTag)) {
-                if (needToPrintMessage) {
-                    messageHolder.set("Use consumer wildcard backup tag to route. Reason: primary tag result is empty");
-                }
-                return invokers;
-            }
             if (tagnameToAddresses != null) {
                 Set<String> backupAddresses =
                         selectAddressByTagLevel(tagnameToAddresses, backupTag, isForceUseTag(invocation));
@@ -308,6 +302,13 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                                     || backupTag.equals(invoker.getUrl().getParameter(BACKUP_TAG_KEY)));
                 }
             } else {
+                if (ANY_VALUE.equals(backupTag)) {
+                    if (needToPrintMessage) {
+                        messageHolder.set(
+                                "Use consumer wildcard backup tag to route. Reason: primary tag result is empty");
+                    }
+                    return invokers;
+                }
                 result = filterInvoker(
                         invokers,
                         invoker -> backupTag.equals(invoker.getUrl().getParameter(TAG_KEY))
