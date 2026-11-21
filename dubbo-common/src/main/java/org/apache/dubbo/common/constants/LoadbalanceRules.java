@@ -51,5 +51,10 @@ public interface LoadbalanceRules {
      **/
     String ADAPTIVE = "adaptive";
 
+    /**
+     * Priority-tier load balance, selecting from the highest priority represented in the candidate providers.
+     **/
+    String PRIORITY = "priority";
+
     String EMPTY = "";
 }
