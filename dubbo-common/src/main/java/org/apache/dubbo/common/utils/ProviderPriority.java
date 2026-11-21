@@ -68,9 +68,19 @@ public final class ProviderPriority {
         if (provider == null) {
             return DEFAULT_PRIORITY;
         }
-        String raw = StringUtils.isEmpty(methodName)
-                ? provider.getParameter(PRIORITY_KEY)
-                : provider.getMethodParameter(methodName, PRIORITY_KEY);
+        String raw;
+        if (StringUtils.isEmpty(methodName)) {
+            raw = provider.getParameter(PRIORITY_KEY);
+        } else {
+            // Check the method-scoped key directly first so dotted method keys added via
+            // URL#addParameter (which URLParam does not index into METHOD_PARAMETERS) and
+            // blank/empty method overrides take precedence instead of falling back to the
+            // provider-wide value.
+            raw = provider.getParameter(methodName + "." + PRIORITY_KEY);
+            if (raw == null) {
+                raw = provider.getMethodParameter(methodName, PRIORITY_KEY);
+            }
+        }
         if (raw == null) {
             return DEFAULT_PRIORITY;
         }

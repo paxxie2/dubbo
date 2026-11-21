@@ -72,6 +72,16 @@ class ProviderPriorityTest {
         URL lowerOverride = URL.valueOf(BASE_URL + "?loadbalance.priority=10&sayHello.loadbalance.priority=-3");
         assertEquals(-3, ProviderPriority.resolve(lowerOverride, "sayHello"));
         assertEquals(10, ProviderPriority.resolve(lowerOverride, "sayBye"));
+
+        URL addedOverride =
+                URL.valueOf(BASE_URL + "?loadbalance.priority=10").addParameter("sayHello.loadbalance.priority", "42");
+        assertEquals(42, ProviderPriority.resolve(addedOverride, "sayHello"));
+        assertEquals(10, ProviderPriority.resolve(addedOverride, "sayBye"));
+
+        URL updatedOverride = URL.valueOf(BASE_URL + "?loadbalance.priority=10&sayHello.loadbalance.priority=5")
+                .addParameter("sayHello.loadbalance.priority", "25");
+        assertEquals(25, ProviderPriority.resolve(updatedOverride, "sayHello"));
+        assertEquals(10, ProviderPriority.resolve(updatedOverride, "sayBye"));
     }
 
     @Test
