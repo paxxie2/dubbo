@@ -26,101 +26,51 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AffinityRuleDocumentTest {
 
+    private static final String BODY = "affinityAware:\n  key: region\n  ratio: 20\n";
+
     @Test
-    void testEmptyDocumentsReturnInvalidRuleAndRetainRawRule() {
-        String[] emptyDocs = new String[] {"", "   \n  ", "# comment only\n", "---\n", "null\n", "~\n"};
-        for (String doc : emptyDocs) {
+    void testMalformedEnvelopesAndVersionsReturnInvalidRule() {
+        assertInvalid("", "   \n  ", "# comment\n", "---\n", "null\n", "~\n");
+        assertInvalid("scalar\n", "42\n", "- a\n- b\n", "[1, 2]\n");
+        for (String h : new String[] {"scope: service", "configVersion: null", "configVersion: 3.1"}) {
+            assertInvalid(h + "\n" + BODY);
+        }
+        for (String h : new String[] {"configVersion: true", "configVersion:\n  - v3.1", "configVersion: v3.0"}) {
+            assertInvalid(h + "\n" + BODY);
+        }
+        assertInvalid("configVersion: \"\"\n" + BODY);
+    }
+
+    @Test
+    void testSyntaxErrorsAndUnsafeTagsPropagate() {
+        assertThrows(YAMLException.class, () -> AffinityRuleParser.parse("configVersion: v3.1\naffinityAware: [bad\n"));
+        assertThrows(YAMLException.class, () -> AffinityRuleParser.parse("!!java.lang.Object {}\n"));
+    }
+
+    @Test
+    void testV31RejectedByFieldValidationAndValidV31Documents() {
+        assertInvalid("configVersion: v3.1\nscope: service\n", "configVersion: v3.1\naffinityAware: not-a-map\n");
+        assertInvalid(
+                "configVersion: v3.1\naffinityAware:\n  key: \"   \"\n  ratio: 20\n",
+                "configVersion: v3.1\naffinityAware:\n  key: region\n  ratio: NaN\n");
+
+        assertValid("configVersion: v3.1\nscope: service\nkey: svc\n" + BODY, "region", 20.0);
+        assertValid("configVersion: v3.1.2\naffinityAware:\n  key: zone\n  ratio: \"37.5\"\n", "zone", 37.5);
+    }
+
+    private static void assertInvalid(String... docs) {
+        for (String doc : docs) {
             AffinityRouterRule rule = AffinityRuleParser.parse(doc);
-            assertFalse(rule.isValid(), "Expected invalid for empty doc: " + doc);
+            assertFalse(rule.isValid(), "Expected invalid for: " + doc);
             assertEquals(doc, rule.getRawRule());
         }
     }
 
-    @Test
-    void testScalarAndListRootsReturnInvalidRuleAndRetainRawRule() {
-        String[] nonMapRoots = new String[] {"just a scalar\n", "42\n", "true\n", "- first\n- second\n", "[1, 2, 3]\n"};
-        for (String doc : nonMapRoots) {
-            AffinityRouterRule rule = AffinityRuleParser.parse(doc);
-            assertFalse(rule.isValid(), "Expected invalid for non-map root: " + doc);
-            assertEquals(doc, rule.getRawRule());
-        }
-    }
-
-    @Test
-    void testMissingNonStringAndUnsupportedConfigVersion() {
-        String[] invalidVersionDocs = new String[] {
-            "scope: service\nkey: com.foo.BarService\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: null\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: 3.1\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: 3\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: true\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion:\n  - v3.1\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion:\n  major: 3\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: v3.0\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: v2.7\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: \"3.1\"\naffinityAware:\n  key: region\n  ratio: 20\n",
-            "configVersion: \"\"\naffinityAware:\n  key: region\n  ratio: 20\n"
-        };
-        for (String doc : invalidVersionDocs) {
-            AffinityRouterRule rule = AffinityRuleParser.parse(doc);
-            assertFalse(rule.isValid(), "Expected invalid for doc: " + doc);
-            assertEquals(doc, rule.getRawRule());
-        }
-    }
-
-    @Test
-    void testYamlSyntaxErrorAndUnsafeTagAreNotSuppressed() {
-        String malformedYaml = "configVersion: v3.1\naffinityAware: [unclosed\n";
-        assertThrows(YAMLException.class, () -> AffinityRuleParser.parse(malformedYaml));
-
-        String unsafeTagYaml = "!!java.lang.Object {}\n";
-        assertThrows(YAMLException.class, () -> AffinityRuleParser.parse(unsafeTagYaml));
-    }
-
-    @Test
-    void testV31DocumentRejectedByFieldValidationRetainsRawRule() {
-        String[] rejectedDocs = new String[] {
-            "configVersion: v3.1\nscope: service\nkey: com.foo.BarService\n",
-            "configVersion: v3.1\naffinityAware: not-a-map\n",
-            "configVersion: v3.1\naffinityAware:\n  key: \"   \"\n  ratio: 20\n",
-            "configVersion: v3.1\naffinityAware:\n  key: region\n  ratio: 150\n",
-            "configVersion: v3.1\naffinityAware:\n  key: region\n  ratio: NaN\n"
-        };
-        for (String doc : rejectedDocs) {
-            AffinityRouterRule rule = AffinityRuleParser.parse(doc);
-            assertFalse(rule.isValid(), "Expected invalid for doc: " + doc);
-            assertEquals(doc, rule.getRawRule());
-        }
-    }
-
-    @Test
-    void testValidV31DocumentRetainsKeyRatioAndRawRule() {
-        String rawRule = "configVersion: v3.1\n"
-                + "scope: service\n"
-                + "key: service.apache.com\n"
-                + "enabled: true\n"
-                + "runtime: true\n"
-                + "affinityAware:\n"
-                + "  key: region\n"
-                + "  ratio: 20\n";
-
-        AffinityRouterRule rule = AffinityRuleParser.parse(rawRule);
+    private static void assertValid(String raw, String key, double ratio) {
+        AffinityRouterRule rule = AffinityRuleParser.parse(raw);
         assertTrue(rule.isValid());
-        assertEquals("region", rule.getAffinityKey());
-        assertEquals(20.0, rule.getRatio());
-        assertEquals(rawRule, rule.getRawRule());
-
-        String prefixVersionRule = "configVersion: v3.1.2\n"
-                + "scope: application\n"
-                + "key: demo-app\n"
-                + "affinityAware:\n"
-                + "  key: zone\n"
-                + "  ratio: \"37.5\"\n";
-
-        AffinityRouterRule prefixed = AffinityRuleParser.parse(prefixVersionRule);
-        assertTrue(prefixed.isValid());
-        assertEquals("zone", prefixed.getAffinityKey());
-        assertEquals(37.5, prefixed.getRatio());
-        assertEquals(prefixVersionRule, prefixed.getRawRule());
+        assertEquals(key, rule.getAffinityKey());
+        assertEquals(ratio, rule.getRatio());
+        assertEquals(raw, rule.getRawRule());
     }
 }

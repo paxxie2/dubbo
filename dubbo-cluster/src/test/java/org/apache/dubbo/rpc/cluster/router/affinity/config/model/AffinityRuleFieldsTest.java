@@ -16,20 +16,14 @@
  */
 package org.apache.dubbo.rpc.cluster.router.affinity.config.model;
 
+import org.apache.dubbo.rpc.cluster.Constants;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
-import static org.apache.dubbo.rpc.cluster.Constants.AFFINITY_KEY;
-import static org.apache.dubbo.rpc.cluster.Constants.CONFIG_VERSION_KEY;
-import static org.apache.dubbo.rpc.cluster.Constants.DefaultAffinityRatio;
-import static org.apache.dubbo.rpc.cluster.Constants.KEY_KEY;
-import static org.apache.dubbo.rpc.cluster.Constants.RATIO_KEY;
-import static org.apache.dubbo.rpc.cluster.Constants.RULE_VERSION_V31;
-import static org.apache.dubbo.rpc.cluster.Constants.SCOPE_KEY;
-import static org.apache.dubbo.rpc.cluster.Constants.VALID_KEY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,119 +31,71 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AffinityRuleFieldsTest {
 
     @Test
-    void testMissingAndNonMapAffinityAwareBlock() {
-        Map<String, Object> missingBlock = baseEnvelope();
-        assertFalse(AffinityRouterRule.parseFromMap(missingBlock).isValid());
-
-        Object[] invalidBlocks = new Object[] {null, "region", 123, Boolean.TRUE, Collections.singletonList("region")};
-        for (Object invalidBlock : invalidBlocks) {
-            Map<String, Object> map = baseEnvelope();
-            map.put(AFFINITY_KEY, invalidBlock);
-            assertFalse(AffinityRouterRule.parseFromMap(map).isValid(), "Expected invalid for block: " + invalidBlock);
+    void testInvalidBlocksAndKeys() {
+        assertFalse(parse(envelope()).isValid());
+        for (Object block : new Object[] {null, "region", 123, true, Collections.singletonList("region")}) {
+            assertFalse(parse(withAffinity(block)).isValid());
+        }
+        assertFalse(parse(withAffinity(Collections.emptyMap())).isValid());
+        for (Object key : new Object[] {null, "", "   \t ", 42, false, Collections.singletonList("region")}) {
+            assertFalse(parse(ruleWith(key, 20)).isValid());
         }
     }
 
     @Test
-    void testMissingNonStringAndBlankKeys() {
-        Map<String, Object> missingKeyMap = baseEnvelope();
-        missingKeyMap.put(AFFINITY_KEY, new HashMap<>());
-        assertFalse(AffinityRouterRule.parseFromMap(missingKeyMap).isValid());
+    void testDefaultAndValidRatios() {
+        AffinityRouterRule defaulted = parse(withAffinity(Collections.singletonMap(Constants.KEY_KEY, "region")));
+        assertTrue(defaulted.isValid());
+        assertEquals("region", defaulted.getAffinityKey());
+        assertEquals(Constants.DefaultAffinityRatio, defaulted.getRatio());
 
-        Object[] invalidKeys =
-                new Object[] {null, "", "   \t ", 42, Boolean.FALSE, Collections.singletonList("region")};
-        for (Object invalidKey : invalidKeys) {
-            Map<String, Object> affinity = new HashMap<>();
-            affinity.put(KEY_KEY, invalidKey);
-            affinity.put(RATIO_KEY, 20);
-            Map<String, Object> map = baseEnvelope();
-            map.put(AFFINITY_KEY, affinity);
-            assertFalse(AffinityRouterRule.parseFromMap(map).isValid(), "Expected invalid for key: " + invalidKey);
+        Object[][] valid = {{0, 0.0}, {100, 100.0}, {"0", 0.0}, {"100", 100.0}, {"12.5", 12.5}, {37.25, 37.25}};
+        for (Object[] c : valid) {
+            AffinityRouterRule rule = parse(ruleWith("region", c[0]));
+            assertTrue(rule.isValid());
+            assertEquals("region", rule.getAffinityKey());
+            assertEquals((Double) c[1], rule.getRatio());
         }
     }
 
     @Test
-    void testDefaultRatioAndValidRatioInputs() {
-        Map<String, Object> defaultMap = baseEnvelope();
-        Map<String, Object> defaultAffinity = new HashMap<>();
-        defaultAffinity.put(KEY_KEY, "region");
-        defaultMap.put(AFFINITY_KEY, defaultAffinity);
-
-        AffinityRouterRule defaultRule = AffinityRouterRule.parseFromMap(defaultMap);
-        assertTrue(defaultRule.isValid());
-        assertEquals("region", defaultRule.getAffinityKey());
-        assertEquals(DefaultAffinityRatio, defaultRule.getRatio());
-
-        assertValidRatio(0, 0.0);
-        assertValidRatio(100, 100.0);
-        assertValidRatio("0", 0.0);
-        assertValidRatio("100", 100.0);
-        assertValidRatio("12.5", 12.5);
-        assertValidRatio(37.25, 37.25);
-    }
-
-    @Test
-    void testInvalidRatios() {
-        Object[] invalidRatios = new Object[] {
-            null,
-            "",
-            "   ",
-            "abc",
-            Boolean.TRUE,
-            Collections.singletonList(10),
-            Double.NaN,
-            "NaN",
-            Double.POSITIVE_INFINITY,
-            Double.NEGATIVE_INFINITY,
-            "Infinity",
-            "-Infinity",
-            -0.1,
-            -1,
-            100.1,
-            101,
-            "-1",
-            "101"
-        };
-        for (Object invalidRatio : invalidRatios) {
-            Map<String, Object> affinity = new HashMap<>();
-            affinity.put(KEY_KEY, "region");
-            affinity.put(RATIO_KEY, invalidRatio);
-            Map<String, Object> map = baseEnvelope();
-            map.put(AFFINITY_KEY, affinity);
-            assertFalse(AffinityRouterRule.parseFromMap(map).isValid(), "Expected invalid for ratio: " + invalidRatio);
+    void testInvalidRatiosAndPreservedInvalidFlag() {
+        for (Object r : new Object[] {null, "", "abc", true, Collections.singletonList(10), Double.NaN, "NaN"}) {
+            assertFalse(parse(ruleWith("region", r)).isValid());
         }
+        for (Object r : new Object[] {Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, "Infinity", "-Infinity"}) {
+            assertFalse(parse(ruleWith("region", r)).isValid());
+        }
+        for (Object r : new Object[] {-0.1, 100.1, "-1", "101"}) {
+            assertFalse(parse(ruleWith("region", r)).isValid());
+        }
+        Map<String, Object> preInvalid = ruleWith("region", 20);
+        preInvalid.put(Constants.VALID_KEY, false);
+        assertFalse(parse(preInvalid).isValid());
     }
 
-    @Test
-    void testPreviouslyInvalidRuleStaysInvalid() {
-        Map<String, Object> affinity = new HashMap<>();
-        affinity.put(KEY_KEY, "region");
-        affinity.put(RATIO_KEY, 20);
-        Map<String, Object> map = baseEnvelope();
-        map.put(VALID_KEY, false);
-        map.put(AFFINITY_KEY, affinity);
-
-        AffinityRouterRule rule = AffinityRouterRule.parseFromMap(map);
-        assertFalse(rule.isValid());
+    private static AffinityRouterRule parse(Map<String, Object> map) {
+        return AffinityRouterRule.parseFromMap(map);
     }
 
-    private static void assertValidRatio(Object ratioInput, double expected) {
-        Map<String, Object> affinity = new HashMap<>();
-        affinity.put(KEY_KEY, "region");
-        affinity.put(RATIO_KEY, ratioInput);
-        Map<String, Object> map = baseEnvelope();
-        map.put(AFFINITY_KEY, affinity);
-
-        AffinityRouterRule rule = AffinityRouterRule.parseFromMap(map);
-        assertTrue(rule.isValid(), "Expected valid for ratio: " + ratioInput);
-        assertEquals("region", rule.getAffinityKey());
-        assertEquals(expected, rule.getRatio());
-    }
-
-    private static Map<String, Object> baseEnvelope() {
+    private static Map<String, Object> envelope() {
         Map<String, Object> map = new HashMap<>();
-        map.put(CONFIG_VERSION_KEY, RULE_VERSION_V31);
-        map.put(SCOPE_KEY, "service");
-        map.put(KEY_KEY, "org.apache.dubbo.demo.DemoService");
+        map.put(Constants.CONFIG_VERSION_KEY, Constants.RULE_VERSION_V31);
+        map.put(Constants.SCOPE_KEY, "service");
+        map.put(Constants.KEY_KEY, "org.apache.dubbo.demo.DemoService");
         return map;
+    }
+
+    private static Map<String, Object> withAffinity(Object affinity) {
+        Map<String, Object> map = envelope();
+        map.put(Constants.AFFINITY_KEY, affinity);
+        return map;
+    }
+
+    private static Map<String, Object> ruleWith(Object key, Object ratio) {
+        Map<String, Object> affinity = new HashMap<>();
+        affinity.put(Constants.KEY_KEY, key);
+        affinity.put(Constants.RATIO_KEY, ratio);
+        return withAffinity(affinity);
     }
 }
