@@ -16,8 +16,8 @@
  */
 package org.apache.dubbo.common.utils;
 
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.stream.Collectors;
 
 import static java.util.Arrays.asList;
@@ -35,7 +35,7 @@ public interface PathUtils {
 
     static String buildPath(String rootPath, String... subPaths) {
 
-        Set<String> paths = new LinkedHashSet<>();
+        List<String> paths = new ArrayList<>(subPaths.length + 1);
         paths.add(rootPath);
         paths.addAll(asList(subPaths));
 
