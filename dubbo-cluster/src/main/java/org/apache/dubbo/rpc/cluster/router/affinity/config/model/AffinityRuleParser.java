@@ -40,18 +40,36 @@ import static org.apache.dubbo.rpc.cluster.Constants.RULE_VERSION_V31;
  */
 public class AffinityRuleParser {
 
+    @SuppressWarnings("unchecked")
     public static AffinityRouterRule parse(String rawRule) {
-        AffinityRouterRule rule;
+        if (rawRule == null) {
+            return invalidRule(null);
+        }
         Yaml yaml = new Yaml(new SafeConstructor(new LoaderOptions()));
-        Map<String, Object> map = yaml.load(rawRule);
-        String confVersion = (String) map.get(CONFIG_VERSION_KEY);
+        Object loaded = yaml.load(rawRule);
+        if (!(loaded instanceof Map<?, ?>)) {
+            return invalidRule(rawRule);
+        }
 
-        rule = AffinityRouterRule.parseFromMap(map);
-        if (StringUtils.isEmpty(rule.getAffinityKey()) || !confVersion.startsWith(RULE_VERSION_V31)) {
+        Map<?, ?> rawMap = (Map<?, ?>) loaded;
+        Object confVersion = rawMap.get(CONFIG_VERSION_KEY);
+        if (!(confVersion instanceof String) || !((String) confVersion).startsWith(RULE_VERSION_V31)) {
+            return invalidRule(rawRule);
+        }
+
+        AffinityRouterRule rule = AffinityRouterRule.parseFromMap((Map<String, Object>) rawMap);
+        if (StringUtils.isEmpty(rule.getAffinityKey())) {
             rule.setValid(false);
         }
         rule.setRawRule(rawRule);
 
+        return rule;
+    }
+
+    private static AffinityRouterRule invalidRule(String rawRule) {
+        AffinityRouterRule rule = new AffinityRouterRule();
+        rule.setValid(false);
+        rule.setRawRule(rawRule);
         return rule;
     }
 }
