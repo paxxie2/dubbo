@@ -24,6 +24,10 @@ class PathUtilsTest {
     void testBuildPath() {
         Assertions.assertEquals("a/b/c", PathUtils.buildPath("a", "b", "c"));
         Assertions.assertEquals("root/sub", PathUtils.buildPath("root", "sub"));
+        Assertions.assertEquals("api/v1/api", PathUtils.buildPath("api", "v1", "api"));
+        Assertions.assertEquals("/root/x/x", PathUtils.buildPath("/root/", "x", null, "", "x?rev=1"));
+        Assertions.assertEquals("a/a", PathUtils.buildPath("", "a", "a"));
+        Assertions.assertEquals("/", PathUtils.buildPath("", null, ""));
     }
 
     @Test
