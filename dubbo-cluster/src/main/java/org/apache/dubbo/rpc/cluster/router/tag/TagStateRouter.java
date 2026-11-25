@@ -196,7 +196,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                         invokers, invoker -> addressNotMatches(invoker.getUrl(), tagRouterRuleCopy.getAddresses()));
                 if (needToPrintMessage && messageHolder != null) {
                     messageHolder.set("Fallback to untagged providers for tag " + tag
-                            + " (dynamic rule). Reason: no primary or backup tag matched and force is false");
+                            + " (dynamic rule). Reason: no primary or backup tag matched and no force policy applied");
                 }
                 return filterInvoker(
                         tmp, invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));

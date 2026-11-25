@@ -1060,8 +1060,21 @@ class TagStateRouterTest {
                 routeWithSnapshot(nonForceRouter, blueOfflineNoProviderBackup, url, blueInvocation, dynFailoverMsg);
         Assertions.assertEquals(Arrays.asList(untagged1, untagged2), dynFailoverResult);
         Assertions.assertEquals(
-                "Fallback to untagged providers for tag blue (dynamic rule). Reason: no primary or backup tag matched and force is false",
+                "Fallback to untagged providers for tag blue (dynamic rule). Reason: no primary or backup tag matched and no force policy applied",
                 dynFailoverMsg.get());
+
+        // 11b. Dynamic rule force=true but requested tag red is not in dynamic rule and no invocation force:
+        // rule force does not apply, so it falls back to untagged providers without claiming force is false
+        RpcInvocation unconfiguredRedInvocation = new RpcInvocation();
+        unconfiguredRedInvocation.setAttachment(TAG_KEY, "red");
+        Holder<String> ruleForceUnmatchedTagFailoverMsg = new Holder<>();
+        List<Invoker<String>> ruleForceUnmatchedTagFailoverResult = routeWithSnapshot(
+                forceRuleRouter, allInvokers, url, unconfiguredRedInvocation, ruleForceUnmatchedTagFailoverMsg);
+        Assertions.assertEquals(Arrays.asList(untagged1, untagged2), ruleForceUnmatchedTagFailoverResult);
+        Assertions.assertEquals(
+                "Fallback to untagged providers for tag red (dynamic rule). Reason: no primary or backup tag matched and no force policy applied",
+                ruleForceUnmatchedTagFailoverMsg.get());
+        Assertions.assertFalse(ruleForceUnmatchedTagFailoverMsg.get().contains("force is false"));
 
         // 12. Untagged request when all providers are in dynamic tag groups -> empty
         BitList<Invoker<String>> onlyDynamicTagged = new BitList<>(Arrays.asList(dynBlue1, dynBetaTeam1));
