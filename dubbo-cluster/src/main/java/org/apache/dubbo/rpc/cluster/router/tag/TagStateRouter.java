@@ -220,7 +220,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             }
             if (needToPrintMessage && messageHolder != null) {
                 messageHolder.set(
-                        "Untagged request routes to untagged providers (dynamic rule). Reason: no tag requested");
+                        "Untagged request routes to untagged providers (dynamic rule). Reason: no tag requested, excluding dynamic tag groups and static tagged providers");
             }
             return filterInvoker(result, invoker -> {
                 String localTag = invoker.getUrl().getParameter(TAG_KEY);

@@ -1073,13 +1073,14 @@ class TagStateRouterTest {
                 "Untagged request returns empty result (dynamic rule). Reason: all providers are in dynamic tag groups",
                 allDynamicUntaggedMsg.get());
 
-        // 13. Untagged request with untagged providers available -> untagged providers in order
+        // 13. Untagged request excludes both dynamic tag groups and static tagged providers
+        // (predicate requires StringUtils.isEmpty(localTag)), preserving untagged provider order
         Holder<String> untaggedReqMsg = new Holder<>();
         List<Invoker<String>> untaggedReqResult =
                 routeWithSnapshot(nonForceRouter, allInvokers, url, new RpcInvocation(), untaggedReqMsg);
         Assertions.assertEquals(Arrays.asList(untagged1, untagged2), untaggedReqResult);
         Assertions.assertEquals(
-                "Untagged request routes to untagged providers (dynamic rule). Reason: no tag requested",
+                "Untagged request routes to untagged providers (dynamic rule). Reason: no tag requested, excluding dynamic tag groups and static tagged providers",
                 untaggedReqMsg.get());
         Assertions.assertNotEquals(dynFailoverMsg.get(), untaggedReqMsg.get());
 
