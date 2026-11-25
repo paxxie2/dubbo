@@ -22,6 +22,7 @@ import org.apache.dubbo.common.utils.Holder;
 import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.RpcInvocation;
 import org.apache.dubbo.rpc.cluster.router.MockInvoker;
+import org.apache.dubbo.rpc.cluster.router.RouterSnapshotNode;
 import org.apache.dubbo.rpc.cluster.router.state.BitList;
 import org.apache.dubbo.rpc.cluster.router.state.StateRouter;
 import org.apache.dubbo.rpc.cluster.router.tag.model.TagRouterRule;
@@ -726,5 +727,476 @@ class TagStateRouterTest {
         List<Invoker<String>> routedAttachmentBackup =
                 router.route(invokers.clone(), consumerUrl, attachmentOverrideInvocation, false, new Holder<>());
         Assertions.assertEquals(Collections.singletonList(invoker4), new ArrayList<>(routedAttachmentBackup));
+    }
+
+    @Test
+    void testSnapshotStaticTagRoutingBranches() {
+        Invoker<String> blue1 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7801/DemoInterface?dubbo.tag=blue")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> blue2 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7802/DemoInterface?dubbo.tag=blue")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> providerBackupForBlue = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7803/DemoInterface?dubbo.tag=alpha&dubbo.backup.tag=blue")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> green1 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7804/DemoInterface?dubbo.tag=green")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> green2 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7805/DemoInterface?dubbo.tag=green")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged1 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7806/DemoInterface").setScopeModel(moduleModel), true);
+        Invoker<String> untagged2 = new MockInvoker<>(
+                URL.valueOf("test://127.0.0.1:7807/DemoInterface").setScopeModel(moduleModel), true);
+
+        BitList<Invoker<String>> allInvokers =
+                new BitList<>(Arrays.asList(blue1, blue2, providerBackupForBlue, green1, green2, untagged1, untagged2));
+        BitList<Invoker<String>> noBlueWithProviderBackup =
+                new BitList<>(Arrays.asList(providerBackupForBlue, green1, green2, untagged1, untagged2));
+        BitList<Invoker<String>> noBlueNoProviderBackup =
+                new BitList<>(Arrays.asList(green1, green2, untagged1, untagged2));
+        BitList<Invoker<String>> onlyUntagged = new BitList<>(Arrays.asList(untagged1, untagged2));
+
+        // Verify both no-rule static mode and disabled/invalid dynamic rule fallback to static mode
+        TagStateRouter<String> noRuleRouter =
+                (TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url);
+
+        TagStateRouter<String> disabledRuleRouter =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        TagRouterRule disabledRule = TagRuleParser.parse("---\n"
+                + "force: true\n"
+                + "runtime: true\n"
+                + "enabled: false\n"
+                + "priority: 1\n"
+                + "key: demo-provider\n"
+                + "tags:\n"
+                + "  - name: blue\n"
+                + "    addresses: [\"127.0.0.1:7801\"]\n"
+                + "...");
+        Mockito.when(disabledRuleRouter.getInvokers()).thenReturn(allInvokers);
+        disabledRule.init(disabledRuleRouter);
+        disabledRuleRouter.setTagRouterRule(disabledRule);
+
+        TagStateRouter<String> invalidRuleRouter =
+                (TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url);
+        TagRouterRule invalidRule = new TagRouterRule();
+        invalidRule.setValid(false);
+        invalidRule.setEnabled(true);
+        invalidRuleRouter.setTagRouterRule(invalidRule);
+
+        for (TagStateRouter<String> router : Arrays.asList(noRuleRouter, disabledRuleRouter, invalidRuleRouter)) {
+            // 1. Upstream candidates empty
+            Holder<String> emptyMsg = new Holder<>();
+            List<Invoker<String>> emptyResult =
+                    routeWithSnapshot(router, BitList.emptyList(), url, new RpcInvocation(), emptyMsg);
+            Assertions.assertEquals(Collections.emptyList(), emptyResult);
+            Assertions.assertEquals("Directly Return. Reason: Invokers from previous router is empty.", emptyMsg.get());
+
+            // 2. Wildcard tag request skips tag routing (distinct from upstream empty)
+            RpcInvocation wildcardInvocation = new RpcInvocation();
+            wildcardInvocation.setAttachment(TAG_KEY, ANY_VALUE);
+            Holder<String> wildcardMsg = new Holder<>();
+            List<Invoker<String>> wildcardResult =
+                    routeWithSnapshot(router, allInvokers, url, wildcardInvocation, wildcardMsg);
+            Assertions.assertEquals(new ArrayList<>(allInvokers), wildcardResult);
+            Assertions.assertEquals("Skip tag routing. Reason: wildcard tag request", wildcardMsg.get());
+            Assertions.assertNotEquals(emptyMsg.get(), wildcardMsg.get());
+
+            // 3. Static primary tag hit preserves order and reports actual matched tag
+            RpcInvocation primaryBlue = new RpcInvocation();
+            primaryBlue.setAttachment(TAG_KEY, "blue");
+            Holder<String> primaryMsg = new Holder<>();
+            List<Invoker<String>> primaryResult = routeWithSnapshot(router, allInvokers, url, primaryBlue, primaryMsg);
+            Assertions.assertEquals(Arrays.asList(blue1, blue2), primaryResult);
+            Assertions.assertEquals(
+                    "Use primary tag blue (static tag) to route. Reason: primary tag matched", primaryMsg.get());
+
+            // 4. Provider-side backup tag hit when primary is empty
+            Holder<String> providerBackupMsg = new Holder<>();
+            List<Invoker<String>> providerBackupResult =
+                    routeWithSnapshot(router, noBlueWithProviderBackup, url, primaryBlue, providerBackupMsg);
+            Assertions.assertEquals(Collections.singletonList(providerBackupForBlue), providerBackupResult);
+            Assertions.assertEquals(
+                    "Use provider backup tag blue to route. Reason: primary tag result is empty",
+                    providerBackupMsg.get());
+
+            // 5. Consumer-side backup tag green hit when primary blue has no candidates
+            RpcInvocation blueBackupGreen = new RpcInvocation();
+            blueBackupGreen.setAttachment(TAG_KEY, "blue");
+            blueBackupGreen.setAttachment(BACKUP_TAG_KEY, "green");
+            Holder<String> consumerBackupMsg = new Holder<>();
+            List<Invoker<String>> consumerBackupResult =
+                    routeWithSnapshot(router, noBlueNoProviderBackup, url, blueBackupGreen, consumerBackupMsg);
+            Assertions.assertEquals(Arrays.asList(green1, green2), consumerBackupResult);
+            Assertions.assertEquals(
+                    "Use consumer backup tag green (static tag) to route. Reason: primary tag result is empty",
+                    consumerBackupMsg.get());
+            Assertions.assertFalse(consumerBackupMsg.get().contains("invalid or disabled"));
+
+            // 6. Consumer wildcard backup tag hit in static mode
+            RpcInvocation blueBackupWildcard = new RpcInvocation();
+            blueBackupWildcard.setAttachment(TAG_KEY, "blue");
+            blueBackupWildcard.setAttachment(BACKUP_TAG_KEY, ANY_VALUE);
+            Holder<String> wildcardBackupMsg = new Holder<>();
+            List<Invoker<String>> wildcardBackupResult =
+                    routeWithSnapshot(router, noBlueNoProviderBackup, url, blueBackupWildcard, wildcardBackupMsg);
+            Assertions.assertEquals(new ArrayList<>(noBlueNoProviderBackup), wildcardBackupResult);
+            Assertions.assertEquals(
+                    "Use consumer wildcard backup tag * to route. Reason: primary tag result is empty",
+                    wildcardBackupMsg.get());
+
+            // 7. Invocation force=true with no matching primary or backup -> empty with explanation
+            RpcInvocation forceBlue = new RpcInvocation();
+            forceBlue.setAttachment(TAG_KEY, "blue");
+            forceBlue.setAttachment(FORCE_USE_TAG, "true");
+            Holder<String> forceEmptyMsg = new Holder<>();
+            List<Invoker<String>> forceEmptyResult =
+                    routeWithSnapshot(router, onlyUntagged, url, forceBlue, forceEmptyMsg);
+            Assertions.assertEquals(Collections.emptyList(), forceEmptyResult);
+            Assertions.assertEquals(
+                    "Return empty result for tag blue. Reason: no available matching invokers and force is true (invocation force)",
+                    forceEmptyMsg.get());
+
+            // 8. Non-force fallback to untagged providers preserves order
+            Holder<String> failoverMsg = new Holder<>();
+            List<Invoker<String>> failoverResult =
+                    routeWithSnapshot(router, noBlueNoProviderBackup, url, primaryBlue, failoverMsg);
+            Assertions.assertEquals(Arrays.asList(untagged1, untagged2), failoverResult);
+            Assertions.assertEquals(
+                    "Fallback to untagged providers for tag blue (static tag). Reason: no primary or backup tag matched and force is false",
+                    failoverMsg.get());
+
+            // 9. Untagged request routes to untagged providers (distinct from tagged fallback)
+            Holder<String> untaggedReqMsg = new Holder<>();
+            List<Invoker<String>> untaggedReqResult =
+                    routeWithSnapshot(router, allInvokers, url, new RpcInvocation(), untaggedReqMsg);
+            Assertions.assertEquals(Arrays.asList(untagged1, untagged2), untaggedReqResult);
+            Assertions.assertEquals(
+                    "Untagged request routes to untagged providers (static tag). Reason: no tag requested",
+                    untaggedReqMsg.get());
+            Assertions.assertNotEquals(failoverMsg.get(), untaggedReqMsg.get());
+        }
+    }
+
+    @Test
+    void testSnapshotDynamicRuleRoutingBranches() {
+        Invoker<String> dynBlue1 = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.1:7801/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> dynBlue2 = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.2:7802/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> dynBetaTeam1 = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.3:7803/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> dynGreenZone1 = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.4:7804/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> staticCanary = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.5:7805/DemoInterface?application=foo&dubbo.tag=canary")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> providerBackupBlue = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.6:7806/DemoInterface?application=foo&dubbo.tag=other&dubbo.backup.tag=blue")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> staticYellow = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.7:7807/DemoInterface?application=foo&dubbo.tag=yellow")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged1 = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.8:7808/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged2 = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.9:7809/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+
+        BitList<Invoker<String>> allInvokers = new BitList<>(Arrays.asList(
+                dynBlue1,
+                dynBlue2,
+                dynBetaTeam1,
+                dynGreenZone1,
+                staticCanary,
+                providerBackupBlue,
+                staticYellow,
+                untagged1,
+                untagged2));
+
+        TagStateRouter<String> nonForceRouter = buildDynamicRouter(false, allInvokers);
+        TagStateRouter<String> forceRuleRouter = buildDynamicRouter(true, allInvokers);
+
+        // 1. Dynamic primary tag hit (exact single-level)
+        RpcInvocation blueInvocation = new RpcInvocation();
+        blueInvocation.setAttachment(TAG_KEY, "blue");
+        Holder<String> dynPrimaryMsg = new Holder<>();
+        List<Invoker<String>> dynPrimaryResult =
+                routeWithSnapshot(nonForceRouter, allInvokers, url, blueInvocation, dynPrimaryMsg);
+        Assertions.assertEquals(Arrays.asList(dynBlue1, dynBlue2), dynPrimaryResult);
+        Assertions.assertEquals(
+                "Use primary tag blue (dynamic rule) to route. Reason: primary tag matched", dynPrimaryMsg.get());
+
+        // 2. Dynamic multi-level primary tag hit reports actual matched level (beta|team1, not beta|team1|partner1)
+        RpcInvocation multiLevelPrimary = new RpcInvocation();
+        multiLevelPrimary.setAttachment(TAG_KEY, "beta|team1|partner1");
+        Holder<String> multiLevelPrimaryMsg = new Holder<>();
+        List<Invoker<String>> multiLevelPrimaryResult =
+                routeWithSnapshot(nonForceRouter, allInvokers, url, multiLevelPrimary, multiLevelPrimaryMsg);
+        Assertions.assertEquals(Collections.singletonList(dynBetaTeam1), multiLevelPrimaryResult);
+        Assertions.assertEquals(
+                "Use primary tag beta|team1 (dynamic rule) to route. Reason: primary tag matched",
+                multiLevelPrimaryMsg.get());
+        Assertions.assertFalse(multiLevelPrimaryMsg.get().contains("beta|team1|partner1"));
+
+        // 3. Dynamic rule enabled, tag not in dynamic rule -> static tag primary hit
+        RpcInvocation canaryInvocation = new RpcInvocation();
+        canaryInvocation.setAttachment(TAG_KEY, "canary");
+        Holder<String> staticPrimaryInDynMsg = new Holder<>();
+        List<Invoker<String>> staticPrimaryInDynResult =
+                routeWithSnapshot(nonForceRouter, allInvokers, url, canaryInvocation, staticPrimaryInDynMsg);
+        Assertions.assertEquals(Collections.singletonList(staticCanary), staticPrimaryInDynResult);
+        Assertions.assertEquals(
+                "Use primary tag canary (static tag) to route. Reason: primary tag matched",
+                staticPrimaryInDynMsg.get());
+
+        // 4. Provider-side backup tag hit when dynamic primary blue is offline
+        BitList<Invoker<String>> blueOfflineWithProviderBackup =
+                new BitList<>(Arrays.asList(dynBetaTeam1, dynGreenZone1, providerBackupBlue, staticYellow, untagged1));
+        Holder<String> providerBackupMsg = new Holder<>();
+        List<Invoker<String>> providerBackupResult = routeWithSnapshot(
+                nonForceRouter, blueOfflineWithProviderBackup, url, blueInvocation, providerBackupMsg);
+        Assertions.assertEquals(Collections.singletonList(providerBackupBlue), providerBackupResult);
+        Assertions.assertEquals(
+                "Use provider backup tag blue to route. Reason: primary tag result is empty", providerBackupMsg.get());
+
+        // 5. Consumer-side multi-level backup tag hit in dynamic rule reports actual matched level green|zone1
+        BitList<Invoker<String>> blueOfflineNoProviderBackup =
+                new BitList<>(Arrays.asList(dynBetaTeam1, dynGreenZone1, staticYellow, untagged1, untagged2));
+        RpcInvocation blueBackupMultiLevelGreen = new RpcInvocation();
+        blueBackupMultiLevelGreen.setAttachment(TAG_KEY, "blue");
+        blueBackupMultiLevelGreen.setAttachment(BACKUP_TAG_KEY, "green|zone1|rack1");
+        Holder<String> dynBackupMsg = new Holder<>();
+        List<Invoker<String>> dynBackupResult = routeWithSnapshot(
+                nonForceRouter, blueOfflineNoProviderBackup, url, blueBackupMultiLevelGreen, dynBackupMsg);
+        Assertions.assertEquals(Collections.singletonList(dynGreenZone1), dynBackupResult);
+        Assertions.assertEquals(
+                "Use consumer backup tag green|zone1 (dynamic rule) to route. Reason: primary tag result is empty",
+                dynBackupMsg.get());
+        Assertions.assertFalse(dynBackupMsg.get().contains("green|zone1|rack1"));
+
+        // 6. Consumer-side backup tag hit via static tag when dynamic rule does not define backup tag
+        RpcInvocation blueBackupStaticYellow = new RpcInvocation();
+        blueBackupStaticYellow.setAttachment(TAG_KEY, "blue");
+        blueBackupStaticYellow.setAttachment(BACKUP_TAG_KEY, "yellow");
+        Holder<String> staticBackupInDynMsg = new Holder<>();
+        List<Invoker<String>> staticBackupInDynResult = routeWithSnapshot(
+                nonForceRouter, blueOfflineNoProviderBackup, url, blueBackupStaticYellow, staticBackupInDynMsg);
+        Assertions.assertEquals(Collections.singletonList(staticYellow), staticBackupInDynResult);
+        Assertions.assertEquals(
+                "Use consumer backup tag yellow (static tag) to route. Reason: primary tag result is empty",
+                staticBackupInDynMsg.get());
+
+        // 7. Dynamic rule force=true empty result (primary tag in dynamic rule is offline)
+        Holder<String> ruleForceEmptyMsg = new Holder<>();
+        List<Invoker<String>> ruleForceEmptyResult =
+                routeWithSnapshot(forceRuleRouter, blueOfflineNoProviderBackup, url, blueInvocation, ruleForceEmptyMsg);
+        Assertions.assertEquals(Collections.emptyList(), ruleForceEmptyResult);
+        Assertions.assertEquals(
+                "Return empty result for tag blue. Reason: no available matching invokers and force is true (dynamic rule force)",
+                ruleForceEmptyMsg.get());
+
+        // 8. Dynamic rule force=true triggered via consumer backup tag matching offline dynamic rule
+        RpcInvocation missingPrimaryWithOfflineDynBackup = new RpcInvocation();
+        missingPrimaryWithOfflineDynBackup.setAttachment(TAG_KEY, "missing");
+        missingPrimaryWithOfflineDynBackup.setAttachment(BACKUP_TAG_KEY, "blue");
+        Holder<String> backupRuleForceMsg = new Holder<>();
+        List<Invoker<String>> backupRuleForceResult = routeWithSnapshot(
+                forceRuleRouter,
+                blueOfflineNoProviderBackup,
+                url,
+                missingPrimaryWithOfflineDynBackup,
+                backupRuleForceMsg);
+        Assertions.assertEquals(Collections.emptyList(), backupRuleForceResult);
+        Assertions.assertEquals(
+                "Return empty result for tag missing. Reason: no available matching invokers and force is true (dynamic rule force)",
+                backupRuleForceMsg.get());
+
+        // 9. Invocation force=true with dynamic rule force=false
+        RpcInvocation invocationForceBlue = new RpcInvocation();
+        invocationForceBlue.setAttachment(TAG_KEY, "blue");
+        invocationForceBlue.setAttachment(FORCE_USE_TAG, "true");
+        Holder<String> invocationForceMsg = new Holder<>();
+        List<Invoker<String>> invocationForceResult = routeWithSnapshot(
+                nonForceRouter, blueOfflineNoProviderBackup, url, invocationForceBlue, invocationForceMsg);
+        Assertions.assertEquals(Collections.emptyList(), invocationForceResult);
+        Assertions.assertEquals(
+                "Return empty result for tag blue. Reason: no available matching invokers and force is true (invocation force)",
+                invocationForceMsg.get());
+
+        // 10. Both dynamic rule force=true and invocation force=true
+        Holder<String> bothForceMsg = new Holder<>();
+        List<Invoker<String>> bothForceResult =
+                routeWithSnapshot(forceRuleRouter, blueOfflineNoProviderBackup, url, invocationForceBlue, bothForceMsg);
+        Assertions.assertEquals(Collections.emptyList(), bothForceResult);
+        Assertions.assertEquals(
+                "Return empty result for tag blue. Reason: no available matching invokers and force is true (dynamic rule and invocation force)",
+                bothForceMsg.get());
+
+        // 11. Dynamic rule force=false fallback to untagged providers preserves order
+        Holder<String> dynFailoverMsg = new Holder<>();
+        List<Invoker<String>> dynFailoverResult =
+                routeWithSnapshot(nonForceRouter, blueOfflineNoProviderBackup, url, blueInvocation, dynFailoverMsg);
+        Assertions.assertEquals(Arrays.asList(untagged1, untagged2), dynFailoverResult);
+        Assertions.assertEquals(
+                "Fallback to untagged providers for tag blue (dynamic rule). Reason: no primary or backup tag matched and force is false",
+                dynFailoverMsg.get());
+
+        // 12. Untagged request when all providers are in dynamic tag groups -> empty
+        BitList<Invoker<String>> onlyDynamicTagged = new BitList<>(Arrays.asList(dynBlue1, dynBetaTeam1));
+        Holder<String> allDynamicUntaggedMsg = new Holder<>();
+        List<Invoker<String>> allDynamicUntaggedResult =
+                routeWithSnapshot(nonForceRouter, onlyDynamicTagged, url, new RpcInvocation(), allDynamicUntaggedMsg);
+        Assertions.assertEquals(Collections.emptyList(), allDynamicUntaggedResult);
+        Assertions.assertEquals(
+                "Untagged request returns empty result (dynamic rule). Reason: all providers are in dynamic tag groups",
+                allDynamicUntaggedMsg.get());
+
+        // 13. Untagged request with untagged providers available -> untagged providers in order
+        Holder<String> untaggedReqMsg = new Holder<>();
+        List<Invoker<String>> untaggedReqResult =
+                routeWithSnapshot(nonForceRouter, allInvokers, url, new RpcInvocation(), untaggedReqMsg);
+        Assertions.assertEquals(Arrays.asList(untagged1, untagged2), untaggedReqResult);
+        Assertions.assertEquals(
+                "Untagged request routes to untagged providers (dynamic rule). Reason: no tag requested",
+                untaggedReqMsg.get());
+        Assertions.assertNotEquals(dynFailoverMsg.get(), untaggedReqMsg.get());
+
+        // 14. Wildcard tag under dynamic rule skips tag routing
+        RpcInvocation wildcardInvocation = new RpcInvocation();
+        wildcardInvocation.setAttachment(TAG_KEY, ANY_VALUE);
+        Holder<String> wildcardMsg = new Holder<>();
+        List<Invoker<String>> wildcardResult =
+                routeWithSnapshot(nonForceRouter, allInvokers, url, wildcardInvocation, wildcardMsg);
+        Assertions.assertEquals(new ArrayList<>(allInvokers), wildcardResult);
+        Assertions.assertEquals("Skip tag routing. Reason: wildcard tag request", wildcardMsg.get());
+    }
+
+    @Test
+    void testSnapshotDisabledGeneratesNoMessage() {
+        Invoker<String> blue = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.1:7801/DemoInterface?application=foo&dubbo.tag=blue")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> green = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.4:7804/DemoInterface?application=foo&dubbo.tag=green")
+                        .setScopeModel(moduleModel),
+                true);
+        Invoker<String> untagged = new MockInvoker<>(
+                URL.valueOf("test://10.20.4.8:7808/DemoInterface?application=foo")
+                        .setScopeModel(moduleModel),
+                true);
+        BitList<Invoker<String>> invokers = new BitList<>(Arrays.asList(blue, green, untagged));
+        BitList<Invoker<String>> noBlue = new BitList<>(Arrays.asList(green, untagged));
+
+        TagStateRouter<String> staticRouter =
+                (TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url);
+        TagStateRouter<String> dynamicRouter = buildDynamicRouter(false, invokers);
+
+        RpcInvocation blueOnly = new RpcInvocation();
+        blueOnly.setAttachment(TAG_KEY, "blue");
+
+        RpcInvocation blueBackupGreen = new RpcInvocation();
+        blueBackupGreen.setAttachment(TAG_KEY, "blue");
+        blueBackupGreen.setAttachment(BACKUP_TAG_KEY, "green");
+
+        RpcInvocation forceBlue = new RpcInvocation();
+        forceBlue.setAttachment(TAG_KEY, "blue");
+        forceBlue.setAttachment(FORCE_USE_TAG, "true");
+
+        RpcInvocation wildcard = new RpcInvocation();
+        wildcard.setAttachment(TAG_KEY, ANY_VALUE);
+
+        for (TagStateRouter<String> router : Arrays.asList(staticRouter, dynamicRouter)) {
+            // Via route() with needToPrintMessage=false: no snapshot child node created
+            RouterSnapshotNode<String> rootNode = new RouterSnapshotNode<>("Parent", noBlue.clone());
+            Holder<RouterSnapshotNode<String>> nodeHolder = new Holder<>();
+            nodeHolder.set(rootNode);
+            List<Invoker<String>> routed = router.route(noBlue.clone(), url, blueBackupGreen, false, nodeHolder);
+            Assertions.assertEquals(Collections.singletonList(green), new ArrayList<>(routed));
+            Assertions.assertTrue(rootNode.getNextNode().isEmpty());
+
+            // Via doRoute() with needToPrintMessage=false: messageHolder stays null across all branches
+            assertNoMessageWhenDisabled(router, BitList.emptyList(), new RpcInvocation(), Collections.emptyList());
+            assertNoMessageWhenDisabled(router, invokers, wildcard, Arrays.asList(blue, green, untagged));
+            assertNoMessageWhenDisabled(router, invokers, blueBackupGreen, Collections.singletonList(blue));
+            assertNoMessageWhenDisabled(router, noBlue, blueBackupGreen, Collections.singletonList(green));
+            assertNoMessageWhenDisabled(router, noBlue, forceBlue, Collections.emptyList());
+            assertNoMessageWhenDisabled(router, noBlue, blueOnly, Collections.singletonList(untagged));
+            assertNoMessageWhenDisabled(router, invokers, new RpcInvocation(), Collections.singletonList(untagged));
+        }
+    }
+
+    private TagStateRouter<String> buildDynamicRouter(boolean force, BitList<Invoker<String>> invokers) {
+        TagStateRouter<String> router =
+                Mockito.spy((TagStateRouter<String>) new TagStateRouterFactory().getRouter(String.class, url));
+        String ruleConfig = "---\n"
+                + "force: " + force + "\n"
+                + "runtime: true\n"
+                + "enabled: true\n"
+                + "priority: 1\n"
+                + "key: foo\n"
+                + "tags:\n"
+                + "  - name: blue\n"
+                + "    addresses: [\"10.20.4.1:7801\", \"10.20.4.2:7802\"]\n"
+                + "  - name: beta|team1\n"
+                + "    addresses: [\"10.20.4.3:7803\"]\n"
+                + "  - name: green|zone1\n"
+                + "    addresses: [\"10.20.4.4:7804\"]\n"
+                + "  - name: green\n"
+                + "    addresses: [\"10.20.4.4:7804\"]\n"
+                + "...";
+        TagRouterRule rule = TagRuleParser.parse(ruleConfig);
+        Mockito.when(router.getInvokers()).thenReturn(invokers);
+        rule.init(router);
+        router.setTagRouterRule(rule);
+        return router;
+    }
+
+    private List<Invoker<String>> routeWithSnapshot(
+            StateRouter<String> router,
+            BitList<Invoker<String>> invokers,
+            URL consumerUrl,
+            RpcInvocation invocation,
+            Holder<String> messageOut) {
+        RouterSnapshotNode<String> rootNode = new RouterSnapshotNode<>("Parent", invokers.clone());
+        Holder<RouterSnapshotNode<String>> nodeHolder = new Holder<>();
+        nodeHolder.set(rootNode);
+        List<Invoker<String>> result = router.route(invokers.clone(), consumerUrl, invocation, true, nodeHolder);
+        Assertions.assertEquals(1, rootNode.getNextNode().size());
+        messageOut.set(rootNode.getNextNode().get(0).getRouterMessage());
+        return new ArrayList<>(result);
+    }
+
+    private void assertNoMessageWhenDisabled(
+            TagStateRouter<String> router,
+            BitList<Invoker<String>> invokers,
+            RpcInvocation invocation,
+            List<Invoker<String>> expected) {
+        Holder<String> messageHolder = new Holder<>();
+        BitList<Invoker<String>> result = router.doRoute(invokers.clone(), url, invocation, false, null, messageHolder);
+        Assertions.assertEquals(expected, new ArrayList<>(result));
+        Assertions.assertNull(messageHolder.get());
     }
 }

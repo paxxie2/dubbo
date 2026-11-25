@@ -101,7 +101,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             Holder<String> messageHolder)
             throws RpcException {
         if (CollectionUtils.isEmpty(invokers)) {
-            if (needToPrintMessage) {
+            if (needToPrintMessage && messageHolder != null) {
                 messageHolder.set("Directly Return. Reason: Invokers from previous router is empty.");
             }
             return invokers;
@@ -111,7 +111,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 ? url.getParameter(TAG_KEY)
                 : invocation.getAttachment(TAG_KEY);
         if (ANY_VALUE.equals(tag)) {
-            if (needToPrintMessage) {
+            if (needToPrintMessage && messageHolder != null) {
                 messageHolder.set("Skip tag routing. Reason: wildcard tag request");
             }
             return invokers;
@@ -120,9 +120,6 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
         // since the rule can be changed by config center, we should copy one to use.
         final TagRouterRule tagRouterRuleCopy = tagRouterRule;
         if (tagRouterRuleCopy == null || !tagRouterRuleCopy.isValid() || !tagRouterRuleCopy.isEnabled()) {
-            if (needToPrintMessage) {
-                messageHolder.set("Disable Tag Router. Reason: tagRouterRule is invalid or disabled");
-            }
             return filterUsingStaticTag(invokers, url, invocation, needToPrintMessage, messageHolder);
         }
 
@@ -131,7 +128,9 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
         // if we are requesting for a Provider with a specific tag
         if (StringUtils.isNotEmpty(tag)) {
             Map<String, Set<String>> tagnameToAddresses = tagRouterRuleCopy.getTagnameToAddresses();
-            Set<String> addresses = selectAddressByTagLevel(tagnameToAddresses, tag, isForceUseTag(invocation));
+            Holder<String> matchedTagHolder = needToPrintMessage ? new Holder<>() : null;
+            Set<String> addresses =
+                    selectAddressByTagLevel(tagnameToAddresses, tag, isForceUseTag(invocation), matchedTagHolder);
             // Tier 1 (Primary): filter by dynamic tag group first, otherwise check static tag
             if (addresses != null) { // null means tag not set
                 result = filterInvoker(invokers, invoker -> addressMatches(invoker.getUrl(), addresses));
@@ -141,8 +140,17 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                         invokers, invoker -> tag.equals(invoker.getUrl().getParameter(TAG_KEY)));
             }
             if (CollectionUtils.isNotEmpty(result)) {
-                if (needToPrintMessage) {
-                    messageHolder.set("Use tag " + tag + " to route. Reason: result is not empty");
+                if (needToPrintMessage && messageHolder != null) {
+                    if (addresses != null) {
+                        String matchedTag = matchedTagHolder != null && matchedTagHolder.get() != null
+                                ? matchedTagHolder.get()
+                                : tag;
+                        messageHolder.set("Use primary tag " + matchedTag
+                                + " (dynamic rule) to route. Reason: primary tag matched");
+                    } else {
+                        messageHolder.set(
+                                "Use primary tag " + tag + " (static tag) to route. Reason: primary tag matched");
+                    }
                 }
                 return result;
             }
@@ -165,11 +173,20 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             // Tier 3 (Force & untagged failover): only when both Tier 1 and Tier 2 are empty.
             // force.tag is set by default to false, which means it will invoke any providers without a tag
             // unless it's explicitly disallowed.
-            if (((addresses != null || Boolean.TRUE.equals(backupMatchedDynamicRule.get()))
-                            && tagRouterRuleCopy.isForce())
-                    || isForceUseTag(invocation)) {
-                if (needToPrintMessage) {
-                    messageHolder.set("Use tag " + tag + " to route. Reason: result is empty and force is true");
+            boolean ruleForce = (addresses != null || Boolean.TRUE.equals(backupMatchedDynamicRule.get()))
+                    && tagRouterRuleCopy.isForce();
+            if (ruleForce || isForceUseTag(invocation)) {
+                if (needToPrintMessage && messageHolder != null) {
+                    String forceSource;
+                    if (ruleForce && isForceUseTag(invocation)) {
+                        forceSource = "dynamic rule and invocation force";
+                    } else if (ruleForce) {
+                        forceSource = "dynamic rule force";
+                    } else {
+                        forceSource = "invocation force";
+                    }
+                    messageHolder.set("Return empty result for tag " + tag
+                            + ". Reason: no available matching invokers and force is true (" + forceSource + ")");
                 }
                 return BitList.emptyList();
             }
@@ -177,8 +194,9 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             else {
                 BitList<Invoker<T>> tmp = filterInvoker(
                         invokers, invoker -> addressNotMatches(invoker.getUrl(), tagRouterRuleCopy.getAddresses()));
-                if (needToPrintMessage) {
-                    messageHolder.set("FAILOVER: return all Providers without any tags");
+                if (needToPrintMessage && messageHolder != null) {
+                    messageHolder.set("Fallback to untagged providers for tag " + tag
+                            + " (dynamic rule). Reason: no primary or backup tag matched and force is false");
                 }
                 return filterInvoker(
                         tmp, invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
@@ -191,16 +209,18 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 result = filterInvoker(invokers, invoker -> addressNotMatches(invoker.getUrl(), addresses));
                 // 1. all addresses are in dynamic tag group, return empty list.
                 if (CollectionUtils.isEmpty(result)) {
-                    if (needToPrintMessage) {
-                        messageHolder.set("all addresses are in dynamic tag group, return empty list");
+                    if (needToPrintMessage && messageHolder != null) {
+                        messageHolder.set(
+                                "Untagged request returns empty result (dynamic rule). Reason: all providers are in dynamic tag groups");
                     }
                     return result;
                 }
                 // 2. if there are some addresses that are not in any dynamic tag group, continue to filter using the
                 // static tag group.
             }
-            if (needToPrintMessage) {
-                messageHolder.set("filter using the static tag group");
+            if (needToPrintMessage && messageHolder != null) {
+                messageHolder.set(
+                        "Untagged request routes to untagged providers (dynamic rule). Reason: no tag requested");
             }
             return filterInvoker(result, invoker -> {
                 String localTag = invoker.getUrl().getParameter(TAG_KEY);
@@ -242,6 +262,9 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                     invoker ->
                             ANY_VALUE.equals(tag) || tag.equals(invoker.getUrl().getParameter(TAG_KEY)));
             if (CollectionUtils.isNotEmpty(result)) {
+                if (needToPrintMessage && messageHolder != null) {
+                    messageHolder.set("Use primary tag " + tag + " (static tag) to route. Reason: primary tag matched");
+                }
                 return result;
             }
             // Tier 2 (Backup)
@@ -252,11 +275,23 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
             }
             // Tier 3 (Force & untagged failover)
             if (isForceUseTag(invocation)) {
+                if (needToPrintMessage && messageHolder != null) {
+                    messageHolder.set("Return empty result for tag " + tag
+                            + ". Reason: no available matching invokers and force is true (invocation force)");
+                }
                 return BitList.emptyList();
+            }
+            if (needToPrintMessage && messageHolder != null) {
+                messageHolder.set("Fallback to untagged providers for tag " + tag
+                        + " (static tag). Reason: no primary or backup tag matched and force is false");
             }
             result = filterInvoker(
                     invokers, invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
         } else {
+            if (needToPrintMessage && messageHolder != null) {
+                messageHolder.set(
+                        "Untagged request routes to untagged providers (static tag). Reason: no tag requested");
+            }
             result = filterInvoker(
                     invokers, invoker -> StringUtils.isEmpty(invoker.getUrl().getParameter(TAG_KEY)));
         }
@@ -276,7 +311,7 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
         BitList<Invoker<T>> result =
                 filterInvoker(invokers, invoker -> tag.equals(invoker.getUrl().getParameter(BACKUP_TAG_KEY)));
         if (CollectionUtils.isNotEmpty(result)) {
-            if (needToPrintMessage) {
+            if (needToPrintMessage && messageHolder != null) {
                 messageHolder.set("Use provider backup tag " + tag + " to route. Reason: primary tag result is empty");
             }
             return result;
@@ -287,10 +322,13 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 ? url.getParameter(BACKUP_TAG_KEY)
                 : invocation.getAttachment(BACKUP_TAG_KEY);
         if (StringUtils.isNotEmpty(backupTag)) {
+            boolean matchedByDynamicRule = false;
+            Holder<String> matchedBackupTagHolder = needToPrintMessage ? new Holder<>() : null;
             if (tagnameToAddresses != null) {
-                Set<String> backupAddresses =
-                        selectAddressByTagLevel(tagnameToAddresses, backupTag, isForceUseTag(invocation));
+                Set<String> backupAddresses = selectAddressByTagLevel(
+                        tagnameToAddresses, backupTag, isForceUseTag(invocation), matchedBackupTagHolder);
                 if (backupAddresses != null) {
+                    matchedByDynamicRule = true;
                     if (backupMatchedDynamicRule != null) {
                         backupMatchedDynamicRule.set(true);
                     }
@@ -303,9 +341,9 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                 }
             } else {
                 if (ANY_VALUE.equals(backupTag)) {
-                    if (needToPrintMessage) {
-                        messageHolder.set(
-                                "Use consumer wildcard backup tag to route. Reason: primary tag result is empty");
+                    if (needToPrintMessage && messageHolder != null) {
+                        messageHolder.set("Use consumer wildcard backup tag " + ANY_VALUE
+                                + " to route. Reason: primary tag result is empty");
                     }
                     return invokers;
                 }
@@ -315,9 +353,17 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
                                 || backupTag.equals(invoker.getUrl().getParameter(BACKUP_TAG_KEY)));
             }
             if (CollectionUtils.isNotEmpty(result)) {
-                if (needToPrintMessage) {
-                    messageHolder.set(
-                            "Use consumer backup tag " + backupTag + " to route. Reason: primary tag result is empty");
+                if (needToPrintMessage && messageHolder != null) {
+                    if (matchedByDynamicRule) {
+                        String matchedBackupTag = matchedBackupTagHolder != null && matchedBackupTagHolder.get() != null
+                                ? matchedBackupTagHolder.get()
+                                : backupTag;
+                        messageHolder.set("Use consumer backup tag " + matchedBackupTag
+                                + " (dynamic rule) to route. Reason: primary tag result is empty");
+                    } else {
+                        messageHolder.set("Use consumer backup tag " + backupTag
+                                + " (static tag) to route. Reason: primary tag result is empty");
+                    }
                 }
                 return result;
             }
@@ -461,14 +507,29 @@ public class TagStateRouter<T> extends AbstractStateRouter<T> implements Configu
      */
     public static Set<String> selectAddressByTagLevel(
             Map<String, Set<String>> tagAddresses, String tagSelector, boolean isForce) {
+        return selectAddressByTagLevel(tagAddresses, tagSelector, isForce, null);
+    }
+
+    private static Set<String> selectAddressByTagLevel(
+            Map<String, Set<String>> tagAddresses,
+            String tagSelector,
+            boolean isForce,
+            Holder<String> matchedTagHolder) {
         if (isForce || StringUtils.isNotContains(tagSelector, TAG_SEPERATOR)) {
-            return tagAddresses.get(tagSelector);
+            Set<String> addresses = tagAddresses.get(tagSelector);
+            if (addresses != null && matchedTagHolder != null) {
+                matchedTagHolder.set(tagSelector);
+            }
+            return addresses;
         }
         String[] selectors = StringUtils.split(tagSelector, TAG_SEPERATOR);
         for (int i = selectors.length; i > 0; i--) {
             String selectorTmp = StringUtils.join(selectors, TAG_SEPERATOR, 0, i);
             Set<String> addresses = tagAddresses.get(selectorTmp);
             if (CollectionUtils.isNotEmpty(addresses)) {
+                if (matchedTagHolder != null) {
+                    matchedTagHolder.set(selectorTmp);
+                }
                 return addresses;
             }
         }
