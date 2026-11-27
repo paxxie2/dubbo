@@ -61,6 +61,37 @@ class LRU2CacheTest {
     }
 
     @Test
+    void testPromotedKeyValueIsUpdatedOnEveryPut() {
+        LRU2Cache<String, Integer> cache = new LRU2Cache<String, Integer>(10);
+
+        // First put only records the key in the history list (two-hit admission).
+        cache.put("key", 1);
+        assertFalse(cache.containsKey("key"));
+
+        // Second put promotes the key into the main cache.
+        cache.put("key", 1);
+        assertTrue(cache.containsKey("key"));
+        assertThat(cache.get("key"), equalTo(1));
+
+        // Every subsequent put for a promoted key must replace the cached value.
+        cache.put("key", 2);
+        assertThat(cache.get("key"), equalTo(2));
+        cache.put("key", 3);
+        assertThat(cache.get("key"), equalTo(3));
+
+        // Updating a promoted key must not add a new entry or change the size.
+        assertThat(cache.size(), equalTo(1));
+
+        // Two-hit admission for new keys is preserved.
+        cache.put("new", 1);
+        assertFalse(cache.containsKey("new"));
+        cache.put("new", 2);
+        assertTrue(cache.containsKey("new"));
+        assertThat(cache.get("new"), equalTo(2));
+        assertThat(cache.size(), equalTo(2));
+    }
+
+    @Test
     void testCapacity() {
         LRU2Cache<String, Integer> cache = new LRU2Cache<String, Integer>();
         assertThat(cache.getMaxCapacity(), equalTo(1000));
