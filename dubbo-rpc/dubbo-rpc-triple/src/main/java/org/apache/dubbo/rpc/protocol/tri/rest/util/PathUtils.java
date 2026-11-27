@@ -153,19 +153,45 @@ public final class PathUtils {
     }
 
     public static String normalize(String contextPath, String path) {
+        return normalize(contextPath, path, false);
+    }
+
+    /**
+     * Normalize a registered path pattern without treating {@code ?} as a query-string delimiter.
+     *
+     * <p>Request paths must continue to use {@link #normalize(String)}, which removes query strings.
+     */
+    public static String normalizePattern(String contextPath, String path) {
+        return normalize(contextPath, path, true);
+    }
+
+    private static String normalize(String contextPath, String path, boolean preserveQuestionMark) {
         if (StringUtils.isEmpty(contextPath)) {
-            return StringUtils.isEmpty(path) ? RestConstants.SLASH : normalize(path);
+            return StringUtils.isEmpty(path) ? RestConstants.SLASH : normalize(path, preserveQuestionMark);
         }
         if (StringUtils.isEmpty(path)) {
-            return normalize(contextPath);
+            return normalize(contextPath, preserveQuestionMark);
         }
         if (path.charAt(0) != '/') {
             contextPath += '/';
         }
-        return normalize(contextPath + path);
+        return normalize(contextPath + path, preserveQuestionMark);
+    }
+
+    /**
+     * Normalize a registered path pattern without treating {@code ?} as a query-string delimiter.
+     *
+     * <p>Request paths must continue to use {@link #normalize(String)}, which removes query strings.
+     */
+    public static String normalizePattern(@Nonnull String path) {
+        return normalize(path, true);
     }
 
     public static String normalize(@Nonnull String path) {
+        return normalize(path, false);
+    }
+
+    private static String normalize(@Nonnull String path, boolean preserveQuestionMark) {
         int len = path.length();
         if (len == 0) {
             return RestConstants.SLASH;
@@ -246,6 +272,10 @@ public final class PathUtils {
                     }
                     break;
                 case '?':
+                    if (!preserveQuestionMark) {
+                        break out;
+                    }
+                    break;
                 case '#':
                     break out;
                 default:
